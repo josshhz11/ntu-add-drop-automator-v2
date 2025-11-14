@@ -603,6 +603,10 @@ def create_app():
 
         return {"is_active": True}"""
 
+    @app.get('/')
+    async def root():
+        return {"message": "NTU Add-Drop Automator Backend API", "status": "running"}
+    
     # API route to process first form submission page on the frontend (username, password, numModules)
     @app.post('/api/login')
     async def api_login(
@@ -746,8 +750,9 @@ app = create_app()
 
 def main():
     """Start the server when running directly."""
-    print("Starting server on http://0.0.0.0:5000")
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000)) # Use Render's PORT env var
+    print(f"Starting server on http://0.0.0.0:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()
