@@ -5,8 +5,6 @@ import redis
 import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -51,12 +49,24 @@ def setup_redis_connection():
     """Set up and return Redis connection."""
     def get_redis():
         """Dependency Injection: Returns a Redis connection"""
-        return redis.StrictRedis(
-            host=os.environ.get("REDIS_HOST", "red-cug9uopopnds7398r2kg"),
-            port=int(os.environ.get("REDIS_PORT", 6379)),
-            password=os.environ.get("REDIS_PASSWORD", None),
-            decode_responses=True
-        )
+        redis_host = os.environ.get("REDIS_HOST")
+        redis_port = int(os.environ.get("REDIS_PORT", 6379))
+        redis_password = os.environ.get("REDIS_PASSWORD")
+
+        redis_config = {
+            "host": redis_host,
+            "port": redis_port,
+            "decode_responses": True,
+            "socket_connect_timeout": 5,
+            "socket_timeout": 5,
+            "retry_on_timeout": True
+        }
+
+        # Only add password to config if it exists
+        if redis_password:
+            redis_config["password"] = redis_password
+        
+        return redis.StrictRedis(**redis_config)
     return get_redis
 
 # Configure ChromeDriver settings (Manual for the Windows path configurations)
@@ -205,17 +215,6 @@ def update_overall_status(redis_db, swap_id, status, message):
 # Login Validation: No session, direct request-based validation
 def validate_login(username: str, password: str):
     return bool(username and password)
-
-def get_base_og_data(title_suffix=""):
-    base_title = "NTU Add-Drop Automator"
-    return {
-        "base_title": base_title,
-        "title": f"{base_title}{' - ' + title_suffix if title_suffix else ''}",
-        "description": "Helping NTU students automate add-drop swapping.",
-        "image": "https://ntu-add-drop-automator.site/static/thumbnail.jpg",
-        "url": "https://ntu-add-drop-automator.site/",
-        "type": "website"
-    }
 
 # ============================================================================
 # SELENIUM AUTOMATION FUNCTIONS
@@ -577,9 +576,6 @@ def create_app():
         allow_headers=["*"],
     )
 
-    # Mount static folder/files
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-
     # ========================================================================
     # ROUTE DEFINITIONS
     # ========================================================================
@@ -719,6 +715,24 @@ def create_app():
         redis_db.delete(swap_id)
 
         return {"success": True, "message": "Swap successfully stopped"}
+    
+    # API route to test redis connectivity
+    @app.get('/api/health')
+    async def health_check(redis_db=Depends(get_redis)):
+        try:
+            # Test Redis connection
+            redis_db.ping()
+            return {
+                "status": "healthy",
+                "redis": "connected",
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "redis": f"disconnected: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
 
     # Testing redis route (for my own usage)
     @app.get('/test-redis')
@@ -730,7 +744,8 @@ def create_app():
         except Exception as e:
             return {"error": f"Redis connection error: {str(e)}"}
 
-    @app.get('/thumbnail')
+    # Move this to frontend
+    """@app.get('/thumbnail')
     async def serve_thumbnail():
         # Serve the image from the "static" directory
         image_path = os.path.join("static", "thumbnail.jpg")
@@ -739,7 +754,7 @@ def create_app():
         if not os.path.exists(image_path):
             raise HTTPException(status_code=404, detail="Thumbnail not found")
         
-        return FileResponse(image_path, media_type="image/jpeg")
+        return FileResponse(image_path, media_type="image/jpeg")"""
 
     return app
 
