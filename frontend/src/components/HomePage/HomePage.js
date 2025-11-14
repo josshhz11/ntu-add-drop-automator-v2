@@ -41,11 +41,6 @@ const HomePage = () => {
     setLoading(true);
     setMessage('');
 
-    // Add these debug logs
-    console.log('NODE_ENV:', process.env.NODE_ENV);
-    console.log('API_BASE_URL:', API_BASE_URL);
-    console.log('Full login URL:', `${API_BASE_URL}/api/login`);
-
     try {
       // Validate that num_modules is a positive number
       const numModules = parseInt(formData.num_modules);
@@ -55,16 +50,17 @@ const HomePage = () => {
         return;
       }
       
-      // Create FormData for the API call
-      const formDataToSend = new FormData();
-      formDataToSend.append('username', formData.username);
-      formDataToSend.append('password', formData.password);
-      formDataToSend.append('num_modules', formData.num_modules);
+      // Send data as JSON for API call
+      const loginData = {
+        username: formData.username,
+        password: formData.password,
+        num_modules: numModules
+      };
 
       // Call the login backend API
-      const response = await axios.post(`${API_BASE_URL}/api/login`, formDataToSend, {
+      const response = await axios.post(`${API_BASE_URL}/api/login`, loginData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
+          'Content-Type': 'application/json',
         },
         withCredentials: true, // Important for session cookies
       });
