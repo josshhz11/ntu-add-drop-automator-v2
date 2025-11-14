@@ -1,0 +1,34 @@
+services:
+  - name: ntu-add-drop-app
+    type: web
+    runtime: docker
+    repo: https://github.com/josshhz11/ntu-add-drop-automator-backup
+    branch: main
+    startCommand: uvicorn app:app --host 0.0.0.0 --port 5000
+    envVars:
+      - key: REDIS_HOST
+        fromService:
+          type: redis
+          name: ntu-add-drop-redis
+          property: host
+      - key: REDIS_PORT
+        fromService:
+          type: redis
+          name: ntu-add-drop-redis
+          property: port
+      - key: REDIS_PASSWORD
+        fromService:
+          type: redis
+          name: ntu-add-drop-redis
+          property: password
+      - key: CHROMEDRIVER_PATH
+        value: "/usr/local/bin/chromedriver"
+    plan: free
+    autoDeploy: true
+    env: docker
+    region: singapore
+
+  - name: ntu-add-drop-redis  # Add Redis Service
+    type: redis
+    plan: free  # Use free plan
+    ipAllowList: [] # allow all IPs
