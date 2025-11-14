@@ -39,7 +39,12 @@ const HomePage = () => {
   const handleSubmit = async (event) => {
     event.preventDefault();
     setLoading(true);
-    setMessage('')
+    setMessage('');
+
+    // Add these debug logs
+    console.log('NODE_ENV:', process.env.NODE_ENV);
+    console.log('API_BASE_URL:', API_BASE_URL);
+    console.log('Full login URL:', `${API_BASE_URL}/api/login`);
 
     try {
       // Validate that num_modules is a positive number
