@@ -568,6 +568,7 @@ def create_app():
         allow_origins=[
             "http://localhost:3000", # React dev server (port 3000)
             "https://ntu-add-drop-automator.vercel.app", # Vercel frontend domain
+            "https://ntu-add-drop-automator-30dxt6xj3-joshua-foos-projects.vercel.app", # Vercel frontend domain 2
             "https://ntu-add-drop-automator-v2-backend.onrender.com",  # Render backend domain
             # "https://www.ntu-add-drop-automator.site" # Custom domain name
         ],
