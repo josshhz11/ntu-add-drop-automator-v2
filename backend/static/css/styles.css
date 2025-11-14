@@ -1,0 +1,403 @@
+:root {
+    --primary-color: #1B4B75;
+    --secondary-color: #2C6BA5;
+    --success-color: #28a745;
+    --warning-color: #ffc107;
+    --danger-color: #dc3545;
+    --light-gray: #f8f9fa;
+    --dark-gray: #6c757d;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    background-color: #f5f7fa !important;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+}
+
+/* Main container styling */
+.main-container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* Enhanced equal height columns */
+.row.shadow-sm {
+    display: flex;
+    min-height: 650px;
+    height: 100%; 
+}
+
+.row.shadow-sm > [class*='col-'] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    flex: 1; /* Make columns take equal space */
+}
+
+/* Make inner containers fill their parent columns */
+.col-md-6 > div:not(.d-flex.gap-2) {
+    flex-grow: 1;
+}
+
+/* Fix the content inside panels to fill available space */
+.col-md-6.bg-light .card,
+.col-md-6.bg-light .card-body,
+.col-md-6.bg-white .card,
+.col-md-6.bg-white .card-body {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Fix elements to fully expand */
+.flex-grow-1 {
+    flex: 1 0 auto !important;
+}
+
+/* Button styles */
+.btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+    transform: translateY(-1px);
+}
+
+.btn-danger {
+    transition: all 0.2s ease;
+}
+
+.btn-danger:hover {
+    transform: translateY(-1px);
+}
+
+/* Card styles */
+.card {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.custom-card {
+    border-radius: 10px;
+    border: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    transition: transform 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+}
+
+.custom-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+/* Form styles */
+.form-control {
+    border-radius: 8px;
+    border: 1px solid #dee2e6;
+    padding: 0.75rem 1rem;
+    font-size: 0.95rem;
+}
+
+.form-control:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(27, 75, 117, 0.25);
+}
+
+.input-group-text {
+    background-color: var(--light-gray);
+    border-color: #dee2e6;
+}
+
+/* Status badge styling */
+.status-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 50rem;
+    font-size: 0.85rem;
+    background-color: var(--light-gray);
+    color: var(--dark-gray);
+}
+
+/* Module input groups */
+.module-input-group {
+    background-color: var(--light-gray);
+    border-radius: 10px;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    transition: all 0.2s ease;
+}
+
+.module-input-group:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    background-color: #fff;
+}
+
+/* Ensure forms fill the available space */
+form.d-flex.flex-column.h-100,
+form.d-flex.flex-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* When there are multiple modules, ensure scrolling works */
+#modulesContainer {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 300px; /* Minimum height before scrolling */
+    max-height: calc(100vh - 350px); /* Responsive maximum height */
+    padding-right: 5px;
+}
+
+#modulesContainer::-webkit-scrollbar {
+    width: 6px;
+}
+
+#modulesContainer::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+#modulesContainer::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 10px;
+}
+
+/* Button and link styling */
+.btn {
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+}
+
+.btn-outline-secondary {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.btn-outline-secondary:hover {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+/* Make sure buttons stick to bottom */
+.mt-auto {
+    margin-top: auto !important;
+}
+
+/* Fix right panel content alignment */
+.col-md-6.bg-light {
+    padding: 1.5rem !important;
+}
+
+.col-md-6.bg-light > div:first-child {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Media queries for responsiveness */
+@media (max-width: 768px) {
+    .row.shadow-sm {
+        flex-direction: column;
+        min-height: auto;
+    }
+    
+    .col-md-6 {
+        min-height: auto;
+    }
+    
+    h1, h2 {
+        font-size: 1.5rem;
+    }
+    
+    .form-control {
+        font-size: 1rem;
+    }
+    
+    .main-container {
+        padding: 1rem;
+    }
+    
+    .d-flex.gap-2 {
+        flex-direction: column;
+    }
+    
+    .btn {
+        margin-bottom: 0.5rem;
+    }
+}
+
+/* Status indicator styling */
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.bg-primary {
+    background-color: var(--primary-color) !important;
+}
+
+.bg-success {
+    background-color: var(--success-color) !important;
+}
+
+.bg-danger {
+    background-color: var(--danger-color) !important;
+}
+
+/* Status item styling */
+.status-item {
+    border: none;
+    border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    transition: all 0.2s ease;
+}
+
+.status-item:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* Make scrollable containers pretty */
+#status-container {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 300px;
+    max-height: calc(100vh - 350px);
+    padding-right: 5px;
+}
+
+#status-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+#status-container::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+#status-container::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 10px;
+}
+
+/* Text styles */
+.text-capitalize {
+    text-transform: capitalize;
+}
+
+.fw-bold {
+    font-weight: 600;
+}
+
+/* Additional styling for offline.html */
+/* Offline page styling */
+.offline-status-container {
+    background-color: white;
+    border-radius: 16px;
+    padding: 2.5rem;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    max-width: 90%;
+    transition: transform 0.3s ease;
+}
+
+.offline-status-container:hover {
+    transform: translateY(-5px);
+}
+
+.offline-icon-container {
+    font-size: 4rem;
+    color: var(--primary-color);
+    height: 100px;
+    width: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background-color: rgba(27, 75, 117, 0.1);
+    margin: 0 auto;
+}
+
+.countdown-container {
+    margin: 30px 0;
+}
+
+.countdown-text {
+    font-size: 1.1rem;
+    color: #6c757d;
+    margin-bottom: 10px;
+}
+
+.date-badge {
+    display: inline-flex;
+    flex-direction: column;
+    padding: 1rem 2rem;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+    color: white;
+}
+
+.date-badge .month {
+    font-size: 1.5rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.date-badge .year {
+    font-size: 1.2rem;
+    font-weight: 700;
+    opacity: 0.9;
+}
+
+/* Improve text styles */
+#status-message h3 {
+    font-weight: 700;
+    font-size: 1.8rem;
+    color: var(--primary-color);
+}
+
+#status-message p {
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+/* Notification button styling */
+.btn-outline-primary {
+    border-width: 2px;
+    font-weight: 500;
+    padding: 0.6rem 1.5rem;
+    border-radius: 8px;
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+/* Make the status message area fill the available space */
+#status-message {
+    flex: 1;
+    min-height: 400px;
+}
