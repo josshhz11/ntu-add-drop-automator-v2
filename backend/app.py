@@ -51,7 +51,6 @@ def setup_redis_connection():
         """Dependency Injection: Returns a Redis connection"""
         redis_host = os.environ.get("REDIS_HOST")
         redis_port = int(os.environ.get("REDIS_PORT", 6379))
-        redis_password = os.environ.get("REDIS_PASSWORD")
 
         redis_config = {
             "host": redis_host,
@@ -61,10 +60,6 @@ def setup_redis_connection():
             "socket_timeout": 5,
             "retry_on_timeout": True
         }
-
-        # Only add password to config if it exists
-        if redis_password:
-            redis_config["password"] = redis_password
         
         return redis.StrictRedis(**redis_config)
     return get_redis
