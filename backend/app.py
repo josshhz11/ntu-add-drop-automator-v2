@@ -674,16 +674,22 @@ def create_app():
 
     # Generate a random secret key for session encryption
     SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(32))
-    app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=SECRET_KEY,
+        same_site="none",
+        https_only=True,
+        max_age=7200 # 2h session timeout    
+    )
 
-    # CORS confiuration for React development (TBC)
+    # CORS configuration for React development
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             "http://localhost:3000",  # React dev server (port 3000)
             "https://ntu-add-drop-automator.vercel.app",  # Vercel frontend domain
             "https://ntu-add-drop-automator-*.vercel.app",  # Allow all Vercel preview deployments
-            "https://ntu-add-drop-automator-v2-backend.onrender.com",  # Render backend domain
+            # "https://ntu-add-drop-automator-v2-backend.onrender.com",  # Render backend domain
             # "https://www.ntu-add-drop-automator.site" # Custom domain name
         ],
         allow_credentials=True,  # Important for session cookies
