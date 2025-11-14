@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <!-- Hidden input for swap ID -->
+    <input type="hidden" id="swap-id" value="{{ swap_id }}">
+    
+    <!-- Status Header -->
+    <div class="mb-4">
+        <h4 class="card-title d-flex align-items-center">
+            <i class="bi bi-arrow-repeat me-2"></i>Swap Status
+        </h4>
+        <div class="d-flex align-items-center mt-2">
+            <div class="status-indicator me-2 
+                {% if status == 'Processing' %}bg-primary{% elif status == 'Completed' %}bg-success{% else %}bg-danger{% endif %}">
+            </div>
+            <h5 id="status-text" class="mb-0 text-capitalize">{{ status }}</h5>
+        </div>
+        <p id="completion-message" class="text-muted mt-2">
+            {% if message %}
+                {{ message }}
+            {% endif %}
+        </p>
+    </div>
+
+    <!-- Dynamic Swap Details -->
+    <div id="status-container" class="flex-grow-1 overflow-auto mb-4">
+        {% for detail in details %}
+        <div class="status-item card mb-3" id="module-{{ loop.index }}">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="card-title mb-0">Module {{ loop.index }}</h5>
+                    <span class="status-badge 
+                        {% if 'Successfully' in detail.message %}bg-success text-white{% endif %}">
+                        {{ 'Completed' if 'Successfully' in detail.message else 'Pending' }}
+                    </span>
+                </div>
+                <div class="mb-2">
+                    <small class="text-muted">Old Index</small>
+                    <p class="mb-0 fw-bold">{{ detail.old_index }}</p>
+                </div>
+                <div class="mb-2">
+                    <small class="text-muted">New Index</small>
+                    <p class="mb-0 fw-bold">{{ detail.new_indexes }}</p>
+                </div>
+                <div>
+                    <small class="text-muted">Status</small>
+                    <p id="status-{{ loop.index }}" class="mb-0">{{ detail.message }}</p>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Button Container -->
+    <div class="mt-auto">
+        <div class="d-grid gap-2">
+            <button id="stop-swap-button" class="btn btn-danger {% if status == 'Completed' or status == 'Error' or status == 'Timed Out' %}d-none{% endif %}">
+                <i class="bi bi-stop-circle me-2"></i>Stop and Log Out
+            </button>
+            <button id="logout-button" class="btn btn-primary {% if status != 'Completed' and status != 'Error' and status != 'Timed Out' %}d-none{% endif %}">
+                <i class="bi bi-box-arrow-right me-2"></i>Log Out
+            </button>
+        </div>
+    </div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+    <!-- JavaScript for updating swap status -->
+    <script>
+        let pollingInterval;
+        
+        // Function to fetch and update status
+        function updateStatus() {
+            // Get the swap_id from the hidden input
+            const swapId = document.getElementById('swap-id').value;
+
+            fetch(`/swap-status/${swapId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text(); // Get the HTML response
+                })
+                .then(html => {
+                    // Create a temporary DOM element to parse the HTML
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = html;
+                    
+                    // Extract the status text
+                    const newStatus = tempDiv.querySelector('#status-text').textContent;
+                    document.getElementById('status-text').textContent = newStatus;
+                    
+                    // Update the status indicator color
+                    const statusIndicator = document.querySelector('.status-indicator');
+                    if (statusIndicator) {
+                        statusIndicator.className = 'status-indicator me-2';
+                        if (newStatus.toLowerCase() === 'completed') {
+                            statusIndicator.classList.add('bg-success');
+                        } else if (newStatus.toLowerCase() === 'error' || newStatus.toLowerCase() === 'timed out' || newStatus.toLowerCase() === 'stopped') {
+                            statusIndicator.classList.add('bg-danger');
+                        } else {
+                            statusIndicator.classList.add('bg-primary');
+                        }
+                    }
+                    
+                    // Extract the completion message
+                    const newMessage = tempDiv.querySelector('#completion-message').textContent.trim();
+                    document.getElementById('completion-message').textContent = newMessage;
+                    
+                    // Update each module's status
+                    const statusItems = tempDiv.querySelectorAll('.status-item');
+                    statusItems.forEach((item, index) => {
+                        const statusSpan = item.querySelector(`p[id^="status-"]`);
+                        if (statusSpan) {
+                            const currentStatusEl = document.getElementById(`status-${index + 1}`);
+                            if (currentStatusEl) {
+                                currentStatusEl.textContent = statusSpan.textContent;
+                                
+                                // Update the status badge if completed
+                                const statusBadge = document.querySelector(`#module-${index + 1} .status-badge`);
+                                if (statusBadge && statusSpan.textContent.includes('Successfully')) {
+                                    statusBadge.textContent = 'Completed';
+                                    statusBadge.className = 'status-badge bg-success text-white';
+                                }
+                            }
+                        }
+                    });
+                    
+                    // Update button visibility based on status
+                    const stopButton = document.getElementById('stop-swap-button');
+                    const logoutButton = document.getElementById('logout-button');
+                    
+                    if (newStatus.toLowerCase() === "completed" || 
+                        newStatus.toLowerCase() === "error" || 
+                        newStatus.toLowerCase() === "timed out" ||
+                        newStatus.toLowerCase() === "stopped") {
+                        stopButton.style.display = "none";
+                        logoutButton.style.display = "block";
+                    } else {
+                        stopButton.style.display = "block";
+                        logoutButton.style.display = "none";
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching swap status:', error);
+                });
+        }
+
+        // Visibility change handler to pause polling in the background
+        function handleVisibilityChange() {
+            if (document.visibilityState === 'visible') {
+                // Start polling when the page is visible
+                if (!pollingInterval) {
+                    pollingInterval = setInterval(updateStatus, 5000);
+                }
+            } else {
+                // Stop polling when the page is hidden
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                }
+            }
+        }
+
+        // Set up visibility change listener
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        // Start polling when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            updateStatus(); // Initial fetch
+            pollingInterval = setInterval(updateStatus, 5000);
+        });
+
+        // Stop and Log Out button functionality
+        document.getElementById('stop-swap-button').addEventListener('click', () => {
+            const swapId = document.getElementById('swap-id').value;
+            
+            // Create form data
+            const formData = new FormData();
+            formData.append('swap_id', swapId);
+            
+            fetch('/stop-swap', { 
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                window.location.href = "/"; // Redirect to index
+            })
+            .catch(error => console.error('Error stopping swap:', error));
+        });
+
+        // Log Out button functionality
+        document.getElementById('logout-button').addEventListener('click', () => {
+            const swapId = document.getElementById('swap-id').value;
+            
+            // Create form data
+            const formData = new FormData();
+            formData.append('swap_id', swapId);
+            
+            fetch('/log-out', { 
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                window.location.href = "/"; // Redirect to index
+            })
+            .catch(error => console.error('Error logging out:', error));
+        });
+    </script>
+
+{% endblock %}

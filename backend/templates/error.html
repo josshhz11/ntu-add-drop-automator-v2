@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <div id="status-message">
+        <h2 id="status-text">Error</h2>
+        <h3 id="completion-message">
+            {% if message %}
+                {{ message }}
+            {% endif %}
+        </h3>
+    </div>
+
+    <!-- Button to log in -->
+    <form action="/" method="GET">
+        <button type="submit" class="submit-button">Log In</button>
+    </form>
+    
+{% endblock %}
