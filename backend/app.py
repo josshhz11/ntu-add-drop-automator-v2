@@ -2,7 +2,7 @@ import json
 import threading
 import redis
 import uvicorn
-from fastapi import FastAPI, Depends, HTTPException, Form, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
 from pydantic import BaseModel
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -24,6 +24,8 @@ from starlette.middleware.sessions import SessionMiddleware
 import secrets
 from fastapi.middleware.cors import CORSMiddleware
 import platform
+from cryptography.fernet import Fernet
+import base64
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -143,6 +145,103 @@ def setup_driver_pool(chrome_options, max_drivers=1):
 
 
 # ============================================================================
+# SECURITY AND ENCRYPTION FUNCTIONS
+# ============================================================================
+
+
+def get_encryption_key():
+    """Get encryption key from environment variables."""
+    key = os.environ.get("ENCRYPTION_KEY")
+    if not key:
+        raise ValueError("ENCRYPTION_KEY environment variable is required.")
+    return key.encode()
+
+
+def encrypt_password(password: str) -> str:
+    """Encrypt password for secure storage in Redis."""
+    key = get_encryption_key()
+    f = Fernet(key)
+    encrypted_password = f.encrypt(password.encode())
+    return base64.urlsafe_b64encode(encrypted_password).decode()
+
+
+def decrypt_password(encrypted_password: str) -> str:
+    """Decrypt password for login during swap attempt."""
+    key = get_encryption_key()
+    f = Fernet(key)
+    encrypted_bytes = base64.urlsafe_b64decode(encrypted_password.encode())
+    decrypted_password = f.decrypt(encrypted_bytes)
+    return decrypted_password.decode()
+
+
+def create_secure_session(redis_db, username: str, password: str) -> str:
+    """Create secure session with encrypted credentials in Redis"""
+    session_id = secrets.token_urlsafe(32)
+
+    # Encrypt password before storing
+    encrypted_password = encrypt_password(password)
+
+    # Store in Redis with 2-hour TTL (7200 seconds)
+    session_data = {
+        "username": username,
+        "encrypted_password": encrypted_password,
+        "authenticated": True,
+        "created_at": time.time(),
+        "expires_at": time.time() + 7200,  # 2 hours
+        # Swap status info (initially empty)
+        "swap_status": "Idle",  # Idle, Processing, Completed, Error, Stopped, Timed Out
+        "swap_message": None,
+        "swap_started_at": None,
+        # Module data (initially empty, populated when swap starts)
+        "modules": [],
+    }
+
+    redis_db.setex(f"session:{session_id}", 7200, json.dumps(session_data))
+    return session_id
+
+
+def get_secure_session(redis_db, session_id: str) -> dict:
+    """Retrieve and validate secure session."""
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session ID provided")
+
+    session_data_json = redis_db.get(f"session:{session_id}")
+    if not session_data_json:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    session_data = json.loads(session_data_json)
+
+    # Additional session expiration check
+    if time.time() > session_data.get("expires_at", 0):
+        redis_db.delete(f"session:{session_id}")
+        raise HTTPException(status_code=401, detail="Session expired.")
+
+    return session_data
+
+
+def update_session_data(redis_db, session_id: str, updates: dict) -> None:
+    """Update session data in Redis"""
+    session_data = get_secure_session(redis_db, session_id)
+    session_data.update(updates)
+
+    # Maintain TTL
+    ttl = redis_db.ttl(f"session:{session_id}")
+    if ttl > 0:
+        redis_db.setex(f"session:{session_id}", ttl, json.dumps(session_data))
+
+
+def get_decrypted_credentials(redis_db, session_id: str) -> tuple:
+    """Get username and decrypted password from secure session."""
+    session_data = get_secure_session(redis_db, session_id)
+
+    username = session_data["username"]
+    encrypted_password = session_data["encrypted_password"]
+    password = decrypt_password(encrypted_password)
+
+    return username, password
+
+
+# ============================================================================
 # GLOBAL VARIABLES (Will be initialized in main())
 # ============================================================================
 
@@ -174,59 +273,48 @@ def initialize_components():
 # ============================================================================
 
 
-def set_status_data(redis_db, swap_id, data):
-    redis_db.set(swap_id, json.dumps(data))
-
-
-def get_status_data(redis_db, swap_id):
-    data = redis_db.get(swap_id)
-    if data:
-        try:
-            return json.loads(data)
-        except json.JSONDecodeError:
-            print(f"Error decoding JSON for swap_id: {swap_id}")
-            return {
-                "status": "error",
-                "details": [],
-                "message": "Error retrieving status data",
+def initialize_swap_in_session(redis_db, session_id: str, swap_items: list) -> None:
+    """Initialize swap data in existing session"""
+    updates = {
+        "swap_status": "Processing",
+        "swap_message": "Your swap request is being processed",
+        "swap_started_at": time.time(),
+        "modules": [
+            {
+                "old_index": item["old_index"],
+                "new_indexes": item["new_indexes"],
+                "swapped": False,
+                "message": "Pending...",
             }
-    return {"status": "idle", "details": [], "message": None}
+            for item in swap_items
+        ],
+    }
+    update_session_data(redis_db, session_id, updates)
 
 
-def update_status(redis_db, swap_id, idx, message, success=False):
-    """
-    Updates the status of a specific module swap in Redis.
+def update_module_status(
+    redis_db, session_id: str, module_idx: int, message: str, success: bool = False
+) -> None:
+    """Update status of specific module in session"""
+    session_data = get_secure_session(redis_db, session_id)
 
-    Args:
-        redis_db: Redis database connection.
-        swap_id (str): Unique swap session ID.
-        idx (int): Index of the module in the details list.
-        message (str): Message to update in the status.
-        success (bool): Whether the swap was successful.
-    """
-    status_data = get_status_data(redis_db, swap_id)
-
-    if idx < len(status_data["details"]):
-        status_data["details"][idx]["message"] = message
+    if module_idx < len(session_data["modules"]):
+        session_data["modules"][module_idx]["message"] = message
         if success:
-            status_data["details"][idx]["swapped"] = True
-        redis_db.set(swap_id, json.dumps(status_data))
+            session_data["modules"][module_idx]["swapped"] = True
+
+        # Update in Redis
+        ttl = redis_db.ttl(f"session:{session_id}")
+        if ttl > 0:
+            redis_db.setex(f"session:{session_id}", ttl, json.dumps(session_data))
 
 
-def update_overall_status(redis_db, swap_id, status, message):
-    """
-    Updates the overall status and message of the swap operation in Redis.
-
-    Args:
-        redis_db: Redis connection (injected via FastAPI).
-        swap_id (str): Unique swap session ID.
-        status (str): The overall status to set (e.g., "Error", "Completed").
-        message (str): The overall message to set.
-    """
-    status_data = get_status_data(redis_db, swap_id)  # Fetch current status
-    status_data["status"] = status  # Update overall status
-    status_data["message"] = message  # Update overall message
-    set_status_data(redis_db, swap_id, status_data)  # Save changes back to Redis
+def update_overall_swap_status(
+    redis_db, session_id: str, status: str, message: str
+) -> None:
+    """Update overall swap status in session"""
+    updates = {"swap_status": status, "swap_message": message}
+    update_session_data(redis_db, session_id, updates)
 
 
 # ============================================================================
@@ -235,7 +323,7 @@ def update_overall_status(redis_db, swap_id, status, message):
 
 
 # Login Validation: No session, direct request-based validation
-def validate_login(username: str, password: str):
+def validate_login(username: str, password: str) -> bool:
     return bool(username and password)
 
 
@@ -244,7 +332,9 @@ def validate_login(username: str, password: str):
 # ============================================================================
 
 
-def login_to_portal(driver, username, password, swap_id, redis_db):
+def login_to_portal(
+    driver, username: str, password: str, session_id: str, redis_db
+) -> bool:
     """
     Log in to the NTU portal.
     """
@@ -289,8 +379,8 @@ def login_to_portal(driver, username, password, swap_id, redis_db):
                 error_message = (
                     "Unable to find or click the 'Plan/ Registration' button."
                 )
-                update_overall_status(
-                    redis_db, swap_id, status="Error", message=error_message
+                update_overall_swap_status(
+                    redis_db, session_id, status="Error", message=error_message
                 )
                 return False
 
@@ -304,20 +394,43 @@ def login_to_portal(driver, username, password, swap_id, redis_db):
     except Exception:
         # If login fails, update status and exit
         error_message = "Incorrect username/password. Please try again."
-        update_overall_status(redis_db, swap_id, status="Error", message=error_message)
+        update_overall_swap_status(
+            redis_db, session_id, status="Error", message=error_message
+        )
         return False
 
 
-def perform_swaps(username, password, swap_items, swap_id, redis_db):
+def perform_swaps(
+    username: str, password: str, swap_items: list, session_id: str, redis_db
+):
     driver = None
 
     try:
         # Browser setup
         driver = get_driver()
-        login_to_portal(driver, username, password, swap_id, redis_db)
+
+        # Update status
+        update_overall_swap_status(
+            redis_db, session_id, "Processing", "Logging into NTU portal..."
+        )
+
+        login_success = login_to_portal(
+            driver, username, password, session_id, redis_db
+        )
+        if not login_success:
+            return
 
         start_time = time.time()
         while True:
+            # Check if session still exists (user might have stopped it)
+            try:
+                session_data = get_secure_session(redis_db, session_id)
+                if session_data.get("swap_status") == "Stopped":
+                    break
+            except HTTPException:
+                break  # Session expired or deleted
+
+            # Attempt swaps
             for idx, item in enumerate(swap_items):
                 if not item["swapped"]:
                     failed_indexes = []
@@ -328,16 +441,16 @@ def perform_swaps(username, password, swap_items, swap_id, redis_db):
                                 new_index=new_index,
                                 idx=idx,
                                 driver=driver,
-                                swap_id=swap_id,
+                                session_id=session_id,
                                 redis_db=redis_db,
                             )
                             if success:
                                 item["swapped"] = True
-                                update_status(
+                                update_module_status(
                                     redis_db,
-                                    swap_id,
+                                    session_id,
                                     idx,
-                                    message=f"Successfully swapped index {item['old_index']} to {item['new_index']}.",
+                                    f"Successfully swapped {item['old_index']} → {new_index}",
                                     success=True,
                                 )
                                 break
@@ -348,35 +461,39 @@ def perform_swaps(username, password, swap_items, swap_id, redis_db):
                             release_driver(driver)  # Release current driver
                             driver = get_driver()  # Get a new driver
                             login_to_portal(
-                                driver, username, password, swap_id, redis_db
+                                driver, username, password, session_id, redis_db
                             )
                             failed_indexes.append(new_index)
                         except Exception as e:
                             error_message = f"Error during swap attempt: {e}"
-                            update_status(redis_db, swap_id, idx, message=error_message)
+                            update_module_status(
+                                redis_db, session_id, idx, message=error_message
+                            )
                             failed_indexes.append(new_index)
+
                     if not item["swapped"] and failed_indexes:
-                        update_status(
+                        update_module_status(
                             redis_db,
-                            swap_id,
+                            session_id,
                             idx,
-                            message=f"Index {', '.join(failed_indexes)} have no vacancies.",
+                            f"Indexes {', '.join(failed_indexes)} have no vacancies.",
                         )
+
             # Check if all items are swapped
             all_swapped = all(item["swapped"] for item in swap_items)
             if all_swapped:
-                update_overall_status(
+                update_overall_swap_status(
                     redis_db,
-                    swap_id,
+                    session_id,
                     status="Completed",
                     message="All modules have been successfully swapped.",
                 )
                 break
 
             if time.time() - start_time >= 2 * 3600:
-                update_overall_status(
+                update_overall_swap_status(
                     redis_db,
-                    swap_id,
+                    session_id,
                     status="Timed Out",
                     message="Time limit reached before completing the swap.",
                 )
@@ -385,8 +502,8 @@ def perform_swaps(username, password, swap_items, swap_id, redis_db):
 
             time.sleep(5 * 60)
     except Exception as e:
-        update_overall_status(
-            redis_db, swap_id, status="Error", message=f"An error occurred: {str(e)}"
+        update_overall_swap_status(
+            redis_db, session_id, status="Error", message=f"An error occurred: {str(e)}"
         )
         print(f"An error occurred: {str(e)}")
     finally:
@@ -394,7 +511,9 @@ def perform_swaps(username, password, swap_items, swap_id, redis_db):
             release_driver(driver)  # Ensure driver is released back to the pool
 
 
-async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
+def attempt_swap(
+    old_index: str, new_index: str, idx: int, driver, session_id: str, redis_db
+) -> tuple:
     """
     Performs swap attempt, updates Redis status, and returns success status.
 
@@ -403,15 +522,15 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
         new_index (str): The desired new course index.
         idx (int): The index in the swap list (for status tracking).
         driver (webdriver.Chrome): Selenium WebDriver instance.
-        swap_id (str): Unique swap session ID.
+        session_id (str): Unique session ID.
         redis_db: Redis connection (Injected via FastAPI).
 
     Returns:
         (bool, str): Tuple with success status and message.
     """
     try:
-        update_status(
-            redis_db, swap_id, idx, f"Attempting to swap {old_index} -> {new_index}"
+        update_module_status(
+            redis_db, session_id, idx, f"Attempting to swap {old_index} -> {new_index}"
         )
 
         # 1) Wait for the table element to appear on the main page
@@ -439,16 +558,16 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
         except TimeoutException:
             # If the radio button is not found within the timeout period
             error_message = f"Old index  {old_index} not found. Swap cannot proceed."
-            update_status(redis_db, swap_id, idx, error_message)
-            update_overall_status(
-                redis_db, swap_id, status="Error", message=error_message
+            update_module_status(redis_db, session_id, idx, error_message)
+            update_overall_swap_status(
+                redis_db, session_id, status="Error", message=error_message
             )
             return False, error_message  # Return a value indicating failure
 
         except Exception as e:
             # Handle any unexpected errors
             error_message = f"Unexpected error locating radio button for index {old_index}: {str(e)}"
-            update_status(redis_db, swap_id, idx, error_message)
+            update_module_status(redis_db, session_id, idx, error_message)
             return False, error_message  # Return a value indicating failure
 
         # 3) Select the "Change Index" option from the dropdown
@@ -475,9 +594,9 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
             alert = driver.switch_to.alert
             alert_text = alert.text
             alert.accept()  # Close the alert
-            update_overall_status(
+            update_overall_swap_status(
                 redis_db,
-                swap_id,
+                session_id,
                 status="Error",
                 message="Portal is closed now. Please try again from 10:30am - 10:00pm.",
             )
@@ -503,7 +622,7 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
             if not options:
                 # If the desired new index is not in the dropdown, handle the error
                 error_message = f"New Index {new_index} was not found in the dropdown options. Swap cannot proceed."
-                update_status(redis_db, swap_id, idx, error_message)
+                update_module_status(redis_db, session_id, idx, error_message)
 
                 # Click the 'Back To Timetable' button
                 back_button = driver.find_element(
@@ -524,7 +643,7 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
                 error_message = (
                     f"Failed to parse vacancies for index {new_index}: {str(e)}"
                 )
-                update_status(redis_db, swap_id, idx, error_message)
+                update_module_status(redis_db, session_id, idx, error_message)
 
                 # Click the 'Back To Timetable' button
                 back_button = driver.find_element(
@@ -543,7 +662,7 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
                 error_message = (
                     f"Index {new_index} has no vacancies. Swap cannot proceed."
                 )
-                update_status(redis_db, swap_id, idx, error_message)
+                update_module_status(redis_db, session_id, idx, error_message)
 
                 # Click the 'Back To Timetable' button
                 back_button = driver.find_element(
@@ -558,8 +677,8 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
             error_message = (
                 f"Unexpected error while checking new index {new_index}: {str(e)}"
             )
-            update_overall_status(
-                redis_db, swap_id, status="Error", message=error_message
+            update_overall_swap_status(
+                redis_db, session_id, status="Error", message=error_message
             )
 
             # Click the 'Back To Timetable' button
@@ -582,7 +701,9 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
             alert = driver.switch_to.alert
             alert_text = alert.text
             alert.accept()  # Close the alert
-            update_overall_status(redis_db, swap_id, status="Error", message=alert_text)
+            update_overall_swap_status(
+                redis_db, session_id, status="Error", message=alert_text
+            )
 
             # Click the 'Back To Timetable' button
             back_button = driver.find_element(
@@ -619,9 +740,9 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
         print(f"Alert text: {alert.text}")
         alert.accept()  # Accept (click OK) on the alert
 
-        update_status(
+        update_module_status(
             redis_db,
-            swap_id,
+            session_id,
             idx,
             f"Successfully swapped {old_index} -> {new_index}",
             success=True,
@@ -630,14 +751,14 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
 
     except SessionNotCreatedException:
         error_message = "Session expired. Re-logging in..."
-        update_status(redis_db, swap_id, idx, error_message)
+        update_module_status(redis_db, session_id, idx, error_message)
         return False, error_message
 
     except Exception as e:
         error_message = (
             f"Error during swap attempt for {old_index} -> {new_index}: {str(e)}"
         )
-        update_status(redis_db, swap_id, idx, error_message)
+        update_module_status(redis_db, session_id, idx, error_message)
         return False, error_message
 
     finally:
@@ -648,15 +769,17 @@ async def attempt_swap(old_index, new_index, idx, driver, swap_id, redis_db):
 # PYDANTIC MODELS FOR REQUEST VALIDATION
 # ============================================================================
 
+
 class LoginRequest(BaseModel):
     username: str
     password: str
     num_modules: int
 
+
 class SwapRequest(BaseModel):
     old_index: str
     new_index: str
-    swap_id: str
+    session_id: str
 
 
 # ============================================================================
@@ -679,7 +802,7 @@ def create_app():
         secret_key=SECRET_KEY,
         same_site="none",
         https_only=True,
-        max_age=7200 # 2h session timeout    
+        max_age=7200,  # 2h session timeout
     )
 
     # CORS configuration for React development
@@ -728,13 +851,20 @@ def create_app():
 
     # API route to process first form submission page on the frontend (username, password, numModules)
     @app.post("/api/login")
-    async def api_login(request: Request, login_data: LoginRequest):
+    async def api_login(
+        request: Request, login_data: LoginRequest, redis_db=Depends(get_redis)
+    ):
         if not validate_login(login_data.username, login_data.password):
             raise HTTPException(status_code=400, detail="Invalid credentials")
 
-        # Store credentials in session
-        request.session["username"] = login_data.username
-        request.session["password"] = login_data.password
+        # Create secure session in Redis
+        session_id = create_secure_session(
+            redis_db, login_data.username, login_data.password
+        )
+
+        # Store only session ID and authentication status in session
+        request.session["session_id"] = session_id
+        request.session["authenticated"] = True
 
         return {"success": True, "message": "Login successful"}
 
@@ -744,17 +874,19 @@ def create_app():
         try:
             form_data = await request.json()
 
-            # Debug session data
-            print(f"Session data: {dict(request.session)}")
+            # Get session ID from session
+            session_id = request.session.get("session_id")
+            if not session_id:
+                raise HTTPException(status_code=401, detail="No active session")
 
-            # Get credentials stored in the session
-            username = request.session.get("username")
-            password = request.session.get("password")
+            # Get decrypted credentials from Redis
+            username, password = get_decrypted_credentials(redis_db, session_id)
 
-            # Should I just call this once? Maybe just here? and no need to do this in api_login (save on backend API calls - although we are still calling the backend, just not performing the login)
+            # Validate credentials again for security
             if not validate_login(username, password):
-                raise HTTPException(status_code=401, detail="Not authenticated")
+                raise HTTPException(status_code=401, detail="Invalid credentials")
 
+            # Parse module data
             num_modules = form_data.get("num_modules", 0)
             module_data = form_data.get("modules", [])
 
@@ -787,67 +919,89 @@ def create_app():
                     }
                 )
 
-            # Generate a unique swap id for this swap session
-            swap_id = f"username_{int(time.time())}"
-
-            # Initialize Redis with status data
-            status_data = {
-                "status": "Processing",
-                "details": [
-                    {
-                        "old_index": item["old_index"],
-                        "new_indexes": ", ".join(item["new_indexes"]),
-                        "swapped": False,
-                        "message": "Pending...",
-                    }
-                    for item in swap_items
-                ],
-                "message": "Your swap request is being processed.",  # Was previously None
-            }
-            redis_db.set(swap_id, json.dumps(status_data))
+            # Initialize swap data in the existing session
+            initialize_swap_in_session(redis_db, session_id, swap_items)
 
             # Start background thread for to execute the swap operation
             thread = threading.Thread(
                 target=perform_swaps,
-                args=(username, password, swap_items, swap_id, redis_db),
+                args=(username, password, swap_items, session_id, redis_db),
                 daemon=True,
             )
             thread.start()
 
             return {
                 "success": True,
-                "swap_id": swap_id,
+                "session_id": session_id,
                 "message": "Swap process started successfully",
             }
 
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(
                 status_code=500, detail=f"Swap initiation failed: {str(e)}"
             )
 
     # API route for returning swap_status data to the frontend
-    @app.get("/api/swap-status/{swap_id}")
-    async def api_get_swap_status(swap_id: str, redis_db=Depends(get_redis)):
-        # Get latest status from Redis
-        status_data = get_status_data(redis_db, swap_id)
+    @app.get("/api/swap-status/{session_id}")
+    async def api_get_swap_status(session_id: str, redis_db=Depends(get_redis)):
+        """Get swap status from session data in Redis"""
+        try:
+            session_data = get_secure_session(redis_db, session_id)
 
-        return status_data
+            # Return swap-specific data
+            return {
+                "status": session_data.get("swap_status", "Idle"),
+                "message": session_data.get("swap_message"),
+                "details": session_data.get("modules", []),
+                "started_at": session_data.get("swap_started_at"),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error retrieving status: {str(e)}"
+            )
 
     # API route for stopping swap operation
-    @app.post("/api/stop-swap/{swap_id}")
+    @app.post("/api/stop-swap/{session_id}")
     async def api_stop_swap(
-        swap_id: str, request: Request, redis_db=Depends(get_redis)
+        session_id: str, request: Request, redis_db=Depends(get_redis)
     ):
-        # Update Redis to stop the process
-        status_data = get_status_data(redis_db, swap_id)
-        status_data["status"] = "Stopped"
-        set_status_data(redis_db, swap_id, status_data)
+        """Stop swap and clean up session"""
+        try:
+            # Update swap status to stopped
+            update_overall_swap_status(
+                redis_db, session_id, "Stopped", "Swap stopped by user"
+            )
 
-        # Clean up
-        request.session.clear()
-        redis_db.delete(swap_id)
+            # Clean up session
+            redis_db.delete(f"session:{session_id}")
+            request.session.clear()
 
-        return {"success": True, "message": "Swap successfully stopped"}
+            return {"success": True, "message": "Swap successfully stopped"}
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error stopping swap: {str(e)}"
+            )
+
+    # API route for logging out once swap is done
+    @app.post("/api/logout/{session_id}")
+    async def api_logout(
+        session_id: str, request: Request, redis_db=Depends(get_redis)
+    ):
+        """Clean logout after swap is done"""
+        try:
+            # Clean up session
+            redis_db.delete(f"session:{session_id}")
+            request.session.clear()
+
+            return {"success": True, "message": "Logged out successfully"}
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error stopping swap: {str(e)}"
+            )
 
     # API route to test redis connectivity
     @app.get("/api/health")
