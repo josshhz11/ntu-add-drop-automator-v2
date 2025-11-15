@@ -69,8 +69,7 @@ const HomePage = () => {
         // Navigate to the input-index page on the frontend
         navigate('/input-index', {
           state: {
-            num_modules: numModules,
-            username: formData.username // do we need to pass this in?
+            num_modules: numModules
           }
         });
       }
