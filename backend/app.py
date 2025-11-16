@@ -2,7 +2,7 @@ import json
 import threading
 import redis
 import uvicorn
-from fastapi import FastAPI, Depends, HTTPException, Form, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
 from pydantic import BaseModel
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service

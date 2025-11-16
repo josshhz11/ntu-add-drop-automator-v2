@@ -8,11 +8,8 @@ import {
   Typography,
   Button,
 } from '@mui/material';
-import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import ChatIcon from '@mui/icons-material/Chat';
 import ShieldIcon from '@mui/icons-material/Shield';
-
-// const API_BASE_URL = 'http://localhost:8000';
 
 const BaseLayout = ({ children, pageTitle = "NTU Add-Drop Automator" }) => {
   return (
