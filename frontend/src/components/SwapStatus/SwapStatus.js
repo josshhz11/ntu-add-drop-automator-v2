@@ -23,7 +23,6 @@ const SwapStatus = () => {
   // Get data passed from InputIndex or use placeholder data
   const passedData = location.state || {};
   const sessionId = passedData.session_id;
-  const numModules = passedData.numModules || 1; // Default to 1
   
   // Initial state - will be replaced by real data from the backend
   const [swapData, setSwapData] = useState({
@@ -34,30 +33,6 @@ const SwapStatus = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Fetch status from backend API call
-  const fetchStatus = async () => {
-    if (!sessionId) return;
-
-    try {
-      const response = await axios.get(`${API_BASE_URL}/api/swap-status/${sessionId}`, {
-        withCredentials: true,
-      });
-
-      setSwapData(response.data); // Updates UI with latest status fetched from Redis through the backend API call
-      setError('');
-    } catch (error) {
-      console.error('Error fetching status:', error);
-
-      if (error.response?.status === 401) {
-        setError('Session expired. Redirecting to login...');
-        setTimeout(() => navigate('/'), 2000);
-        return;
-      }
-
-      setError('Failed to fetch swap status');
-    }
-  };
-
   // Set up polling for status updates
   useEffect(() => {
     if (!sessionId) {
@@ -65,15 +40,38 @@ const SwapStatus = () => {
       return;
     }
 
+    const fetchStatus = async () => {
+      if (!sessionId) return;
+
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/swap-status/${sessionId}`, {
+          withCredentials: true,
+        });
+
+        setSwapData(response.data); // Updates UI with latest status fetched from Redis through the backend API call
+        setError('');
+      } catch (error) {
+        console.error('Error fetching status:', error);
+
+        if (error.response?.status === 401) {
+          setError('Session expired. Redirecting to login...');
+          setTimeout(() => navigate('/'), 2000);
+          return;
+        }
+
+        setError('Failed to fetch swap status');
+      }
+    };
+
     // Fetch swap_status immediately
     fetchStatus();
 
-    // Set up polling every 5 seocnds
+    // Set up polling every 5 seconds
     const interval = setInterval(fetchStatus, 5000);
     
     // Cleanup interval on component unmount
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, navigate]);
 
   const handleStopSwap = async () => {
     if (!sessionId) return;
