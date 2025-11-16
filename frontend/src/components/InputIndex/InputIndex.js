@@ -84,7 +84,7 @@ const InputIndex = () => {
         // Navigate to the swap-status page on the frontend
         navigate('/swap-status', {
           state: {
-            swap_id: response.data.swap_id,
+            session_id: response.data.session_id,
             numModules,
             formData
           }
