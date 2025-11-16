@@ -19,3 +19,5 @@ httpx
 fakeredis
 cryptography==41.0.7
 pydantic
+ruff==0.1.6
+pre-commit==3.5.0

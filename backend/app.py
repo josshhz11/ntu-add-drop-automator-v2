@@ -250,7 +250,7 @@ get_driver = None
 release_driver = None
 
 
-def initialize_components():
+def initialize_components() -> None:
     """Initialize all components needed by the app."""
     global get_redis, get_driver, release_driver
 

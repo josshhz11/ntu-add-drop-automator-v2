@@ -1,0 +1,53 @@
+[tool.ruff]
+# Same as Black's line length
+line-length = 88
+
+# Enable specific rule sets
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings  
+    "F",   # Pyflakes
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade (modernize syntax)
+    "N",   # pep8-naming
+]
+
+# Ignore specific rules that might be too strict
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "E203",  # whitespace before ':'
+    "W503",  # line break before binary operator
+]
+
+# Exclude directories from linting
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "node_modules",
+    "build",
+    "dist",
+    ".pytest_cache",
+]
+
+# Target Python 3.9+ (match your project)
+target-version = "py39"
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with 4 spaces
+indent-style = "space"
+
+# Skip string normalization to avoid conflicts
+skip-string-normalization = false
+
+[tool.ruff.isort]
+# Group imports
+known-first-party = ["app"]
+force-single-line = false
