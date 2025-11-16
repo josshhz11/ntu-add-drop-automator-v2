@@ -22,59 +22,63 @@ const SwapStatus = () => {
   
   // Get data passed from InputIndex or use placeholder data
   const passedData = location.state || {};
-  const swapId = passedData.swap_id;
-  const numModules = passedData.numModules || 1; // Default to 1
+  const sessionId = passedData.session_id;
   
-  // Placeholder swap data - in production this would come from Redis/backend
-  // NOT SURE WHETHER TO KEEP
+  // Initial state - will be replaced by real data from the backend
   const [swapData, setSwapData] = useState({
-    status: 'Processing', // Processing, Completed, Error, Timed Out, Stopped
+    status: 'Loading', // Processing, Completed, Error, Timed Out, Stopped
     message: 'Loading swap status...',
     details: []
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Fetch status from backend API call
-  const fetchStatus = async () => {
-    if (!swapId) return;
-
-    try {
-      const response = await axios.get(`${API_BASE_URL}/api/swap-status/${swapId}`, {
-        withCredentials: true,
-      });
-
-      setSwapData(response.data); // Updates UI with latest status fetched from Redis through the backend API call
-      setError('');
-    } catch (error) {
-      console.error('Error fetching status:', error);
-      setError('Failed to fetch swap status');
-    }
-  };
-
   // Set up polling for status updates
   useEffect(() => {
-    if (!swapId) {
-      setError('No swap ID provided');
+    if (!sessionId) {
+      setError('No session ID provided');
       return;
     }
+
+    const fetchStatus = async () => {
+      if (!sessionId) return;
+
+      try {
+        const response = await axios.get(`${API_BASE_URL}/api/swap-status/${sessionId}`, {
+          withCredentials: true,
+        });
+
+        setSwapData(response.data); // Updates UI with latest status fetched from Redis through the backend API call
+        setError('');
+      } catch (error) {
+        console.error('Error fetching status:', error);
+
+        if (error.response?.status === 401) {
+          setError('Session expired. Redirecting to login...');
+          setTimeout(() => navigate('/'), 2000);
+          return;
+        }
+
+        setError('Failed to fetch swap status');
+      }
+    };
 
     // Fetch swap_status immediately
     fetchStatus();
 
-    // Set up polling every 5 seocnds
+    // Set up polling every 5 seconds
     const interval = setInterval(fetchStatus, 5000);
     
     // Cleanup interval on component unmount
     return () => clearInterval(interval);
-  }, [swapId]);
+  }, [sessionId, navigate]);
 
   const handleStopSwap = async () => {
-    if (!swapId) return;
+    if (!sessionId) return;
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/stop-swap/${swapId}`, {}, {
+      const response = await axios.post(`${API_BASE_URL}/api/stop-swap/${sessionId}`, {}, {
         withCredentials: true,
       });
 
@@ -91,14 +95,14 @@ const SwapStatus = () => {
 
   // Log out is for after successful swap
   const handleLogout = async () => {
-    if (!swapId) {
+    if (!sessionId) {
       navigate('/');
       return;
     }
     
     setLoading(true);
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/logout/${swapId}`, {}, {
+      const response = await axios.post(`${API_BASE_URL}/api/logout/${sessionId}`, {}, {
         withCredentials: true,
       });
 
@@ -135,7 +139,7 @@ const SwapStatus = () => {
     }
   };
 
-  if (!swapId) {
+  if (!sessionId) {
     return (
       <BaseLayout>
         <Alert severity="error">
