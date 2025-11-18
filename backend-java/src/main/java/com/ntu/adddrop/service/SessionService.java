@@ -9,7 +9,6 @@ import org.springframework.stereotype.Service;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Base64;
-import java.util.List;
 
 @Service
 public class SessionService {
@@ -68,7 +67,7 @@ public class SessionService {
             return sessionData;
         } catch (Exception e) {
             if (e instanceof SecurityException) {
-                throw e;
+                throw new SecurityException("Error: ", e);
             }
             throw new RuntimeException("Failed to retrieve session", e);
         }

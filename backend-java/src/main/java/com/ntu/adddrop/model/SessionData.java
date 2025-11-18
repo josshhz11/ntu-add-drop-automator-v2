@@ -91,6 +91,15 @@ public class SessionData {
     // Constructors
     public SessionData() {}
 
+    public SessionData(String username, String encryptedPassword, boolean authenticated) {
+        this.username = username;
+        this.encryptedPassword = encryptedPassword;
+        this.authenticated = authenticated;
+        this.createdAt = System.currentTimeMillis() / 1000;
+        this.expiresAt = System.currentTimeMillis() / 1000 + 7200; // 2 hours
+        this.swapStatus = "Idle";
+    }
+
     // All Getters and Setters
     public String getUsername() {
         return username;

@@ -1,5 +1,7 @@
 package com.ntu.adddrop.model;
 
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -14,8 +16,8 @@ public class LoginRequest {
     @Size(min = 1, max = 100, message = "Password must be between 1 and 100 characters")
     private String password;
 
-    @NotBlank(message = "Number of Modules is required")
-    @Size(min = 1, max = 6, message = "Number of Modules must be between 1 and 6")
+    @Min(value = 1, message = "Number of modules must be at least 1")
+    @Max(value = 6, message = "Number of modules cannot exceed 6")
     private int numModules;
 
     // Constructors
