@@ -1,4 +1,4 @@
-package main.java.com.ntu.controller;
+package com.ntu.adddrop.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
