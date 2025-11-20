@@ -2,8 +2,8 @@ services:
   - name: ntu-add-drop-app
     type: web
     runtime: docker
-    repo: https://github.com/josshhz11/ntu-add-drop-automator-backup
-    branch: main
+    repo: https://github.com/josshhz11/ntu-add-drop-automator-v2
+    branch: backend
     startCommand: uvicorn app:app --host 0.0.0.0 --port 5000
     envVars:
       - key: REDIS_HOST
