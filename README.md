@@ -1,42 +1,95 @@
 # NTU Add-Drop Automator v2
 
-![NTU Add-Drop Automator Logo](static/NTU-Add-Drop-Automator-Logo.png)
+This project is an automation tool designed for Nanyang Technological University (Singapore), benefiting over 30,000 students. It utilizes a Redis cache database database to store all session swap information (with credentials encrypted and stored for no longer than 2 hours), a FastAPI application to create a RESTful API for the backend, and a ReactJS frontend for intuitive user interaction.
 
-## Problem Statement
-To help NTU students arrange their modules and classes efficiently during the add-drop period at the start of each semester (January, August).
+## Visit The Site
 
-Nanyang Technological University students have always faced the issue of having to 'camp' on the school portal, to wait for vacancies for the class slots they want, due to it being first-come-first-serve. This manual slot checking for slot timings for the classes students want is an inconvenience at the start of every semester.
+Feel free to check out the [project here!](https://ntu-add-drop-automator.vercel.app/)
 
-This web application provides a solution to this problem: by making use of web agents automate the process of logging into the school website to attempt swaps for course indexes.
+<img width="1301" alt="NTU Add-Drop Automator Home Page" src="https://github.com/josshhz11/ntu-add-drop-automator-v3/blob/main/assets/NTU-Add-Drop-Automator-Home-Page.png">
 
-## The Solution
-A full-stack web application used by 1400+ NTU students to automate course swapping using web agents, reducing manual slot checking by 40%, with a tech stack comprising FastAPI, vanilla HTML, CSS, and JS for web design, containerized using Docker for deployment on Render.
+## Features
 
-How this application works is that it makes use of web agents to automatically log into the school portal every five minutes, to check and attempt swaps for course indexes. If there are no slots, the web agent will try again every five minutes, until a swap is found or 2 hours is up, whichever is sooner.
+- **Redis Database:** Stores detailed information on each user's NTU portal credentials (encrypted) and swap sessions (including unique session ID, old and new indexes, and swap status).
+- **FastAPI Backend:** Provides a high-performance RESTful API to manage asynchronous, periodic swap execution efficiently. The backend is packaged as a Dockerfile and hosted on Render/Heroku.
+- **ReactJS Frontend:** A user-friendly interface for keying in user credentials, swap information, and viewing swap statuses. The frontend is hosted on Vercel.
 
-## How can we use this web application?
+## Prerequisites
 
-### 1. Home Page
-On the home screen, you are presented with 3 input fields: your username and password for the school portal, as well as the number of modules you wish to swap. These sensitive details of username and password are not stored on any server or database beyond your session and is only used during your session for the functioning of the app to execute your course swaps. Once your session has ended, the user credentials are forgotten and not stored. These credentials are also not accessible to anyone including me.
+Before running this project locally, ensure you have the following installed:
 
-![Index Page](static/NTU-Add-Drop-Automator-Index.jpg)
+- Python 3.9 or higher
+- Node.js and npm (Node Package Manager)
+- Redis database (or Docker for Redis container)
+- Chrome browser (for Selenium automation)
+- IDE (VS Code, PyCharm, etc.)
 
-### 2. Input Indexes Page
-On the next page, you are presented with 2 input fields for every module you wish to swap: the old index and new index(es). For each module, you simply need to enter in the old index of the module you wish to swap out of (you do not need to key in the course code), and the new indexes (at least 1), that you wish to enter. If you wish to attempt swaps for multiple new indexes, you can enter it all into the same input field, separated by a comma and a space, i.e. "80271, 80272, 80273"
+## Installation
 
-![Swap Status Page](static/NTU-Add-Drop-Automator-Input-Index.png)
+### Backend Setup
 
-### 3. Swap Status Page
-On the final page, you are presented with a swap status page which shows the status for all the modules you are attempting to swap. Once done, you will be shown a "Completed" status, as below.
+1. Clone this repository.
+2. Navigate to the `backend` directory in your terminal.
+3. Create a virtual environment: `python -m venv venv`
+4. Activate the virtual environment:
+   - Windows: `venv\Scripts\activate`
+   - macOS/Linux: `source venv/bin/activate`
+5. Install dependencies: `pip install -r requirements.txt`
+6. Configure the `.env` file with your Redis database credentials.
+7. Install Chrome and ChromeDriver for Selenium automation.
+8. Run the FastAPI application using `uvicorn app:app --reload`.
 
-![Swap Status Page](static/NTU-Add-Drop-Automator-Swap-Complete.jpg)
+### Frontend Setup
 
-## Security and Privacy Concerns
-As this app handles students' sensitive user credentials for the school portal, I have taken measures to ensure the credentials are safe and not accessible by anyone including me. I've implemented the storing of user credentials only during the duration of the session (i.e. the 2 hours or less of each swap session), and this is solely for the swap attempts. Beyond that, no user credentials are stored and accessible. Moreover, the user credentials are stored as part of the session itself and are not accessible on the web (via inspecting HTML elements). 
+1. Navigate to the `frontend` directory in your terminal.
+2. Run `npm install` to install the necessary dependencies.
+3. Update the `src/config/api.js` file with the appropriate backend API URL.
+4. Run `npm start` to start the ReactJS application.
 
-If you do find any additional security concerns, feel free to reach out to me below.
+### Local Development with Docker
 
-## Feedback
-Feel free to reach out if you have any feedback or are running into any issues on this Google Form [here](https://docs.google.com/forms/d/e/1FAIpQLSdniXT-UR1MLjssAkZLvJunD2lCgfckdjMd7iamOFD-cjCMKg/viewform).
+1. Start Redis using Docker:
+   ```bash
+   docker run --name redis-local -p 6379:6379 -d redis:latest
+   ```
+2. Follow the Backend and Frontend setup steps above.
 
-I'm also open to any collaborations! Especially with the frontend haha as it's not very nice-looking (especially if anyone's interested in using React/Next.js, etc. to make the site more aesthetic).
+## Usage
+
+- Access the frontend application via `http://localhost:3000`.
+- The FastAPI backend runs on `http://localhost:8000` by default.
+- Use the provided API endpoints to perform course swap operations:
+  - `/api/login` - POST user authentication with NTU credentials.
+  - `/api/submit-swap` - POST to start automated course swap process.
+  - `/api/swap-status/{sessionId}` - GET real-time swap progress and status.
+  - `/api/stop-swap/{sessionId}` - POST to stop ongoing swap process.
+  - `/api/health` - GET application health check.
+
+## API Documentation
+
+### Authentication
+- **POST** `/api/login`
+  - Body: `{"username": "ntu_username", "password": "ntu_password", "num_modules": 2}`
+  - Response: `{"success": true, "session_id": "unique_session_id", "num_modules": 2}`
+
+### Course Swapping  
+- **POST** `/api/submit-swap`
+  - Body: `{"num_modules": 2, "modules": [{"old_index": "12345", "new_indexes": "12346,12347"}]}`
+  - Response: `{"success": true, "session_id": "session_id", "message": "Swap process started"}`
+
+### Status Monitoring
+- **GET** `/api/swap-status/{sessionId}`
+  - Response: `{"status": "Processing", "message": "Attempting swap...", "details": [...]}`
+
+### Interactive API Documentation
+FastAPI provides automatic interactive API documentation:
+- **Swagger UI:** `http://localhost:8000/docs`
+- **ReDoc:** `http://localhost:8000/redoc`
+
+## Contributing
+
+Contributions are welcome! If you'd like to enhance this project or report issues, please submit a pull request or open an issue.
+
+## License
+
+This project is for educational purposes only. Please use responsibly and in accordance with NTU's terms of service.
