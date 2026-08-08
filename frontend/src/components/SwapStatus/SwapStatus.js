@@ -233,7 +233,9 @@ const SwapStatus = () => {
                       New Index
                     </Typography>
                     <Typography variant="body1" fontWeight="bold">
-                      {detail.new_indexes}
+                      {Array.isArray(detail.new_indexes)
+                        ? detail.new_indexes.join(', ')
+                        : detail.new_indexes}
                     </Typography>
                   </Box>
                   

@@ -91,7 +91,6 @@ def setup_chrome_options():
     chrome_options.add_argument("--disable-gpu")  # Fixes rendering issues
     chrome_options.add_argument("--no-sandbox")  # Required for running as root
     chrome_options.add_argument("--disable-dev-shm-usage")  # Fix shared memory issues
-    chrome_options.add_argument("--remote-debugging-port=9222")  # Enables debugging
     chrome_options.add_argument("--disable-software-rasterizer")  # Prevents crashes
     chrome_options.add_argument("--window-size=1920x1080")  # Ensures proper rendering
     return chrome_options
@@ -110,7 +109,7 @@ def create_driver(chrome_options):
         raise
 
 
-def setup_driver_pool(chrome_options, max_drivers=1):
+def setup_driver_pool(chrome_options, max_drivers=3):
     """Set up and return driver pool functions."""
     driver_pool = []
     pool_lock = threading.Lock()
@@ -127,14 +126,13 @@ def setup_driver_pool(chrome_options, max_drivers=1):
                 print("Creating new ChromeDriver instance...")
                 try:
                     driver = create_driver(chrome_options)
-                    if driver:
-                        print("ChromeDriver started successfully!")
-                    else:
-                        print("Failed to start ChromeDriver.")
+                    print("ChromeDriver started successfully!")
                     return driver
                 except Exception as e:
                     print(f"Error starting ChromeDriver: {str(e)}")
-                    return None
+                    raise RuntimeError(
+                        f"Failed to start a new Chrome browser instance: {e}"
+                    ) from e
 
     # Return driver to the pool
     def release_driver(driver):
@@ -265,7 +263,7 @@ def initialize_components() -> None:
 
     print("Setting up Chrome WebDriver pool...")
     chrome_options = setup_chrome_options()
-    get_driver, release_driver = setup_driver_pool(chrome_options, max_drivers=1)
+    get_driver, release_driver = setup_driver_pool(chrome_options, max_drivers=3)
 
 
 # ============================================================================
@@ -390,6 +388,8 @@ def login_to_portal(
                 (By.XPATH, "//table[@bordercolor='#E0E0E0']")
             )
         )
+
+        return True
     # If login fails, print exception
     except Exception:
         # If login fails, update status and exit
@@ -594,13 +594,14 @@ def attempt_swap(
             alert = driver.switch_to.alert
             alert_text = alert.text
             alert.accept()  # Close the alert
+            error_message = "Portal is closed now. Please try again from 10:30am - 10:00pm."
             update_overall_swap_status(
                 redis_db,
                 session_id,
                 status="Error",
-                message="Portal is closed now. Please try again from 10:30am - 10:00pm.",
+                message=error_message,
             )
-            return False
+            return False, error_message
         except TimeoutException:
             pass  # If no alert, proceed to the swap index page
 
