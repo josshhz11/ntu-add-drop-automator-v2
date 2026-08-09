@@ -14,16 +14,21 @@ import StopCircleIcon from '@mui/icons-material/StopCircle';
 import LogoutIcon from '@mui/icons-material/Logout';
 import BaseLayout from '../Base/Base';
 import API_BASE_URL from '../../config/api';
+import {
+  POLL_INTERVAL_ACTIVE_MS,
+  POLL_INTERVAL_IDLE_MS,
+  POLL_INTERVAL_ERROR_MS,
+} from '../../config/polling';
 import axios from 'axios';
 
 const SwapStatus = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  
+
   // Get data passed from InputIndex or use placeholder data
   const passedData = location.state || {};
   const sessionId = passedData.session_id;
-  
+
   // Initial state - will be replaced by real data from the backend
   const [swapData, setSwapData] = useState({
     status: 'Loading', // Processing, Completed, Error, Timed Out, Stopped
@@ -35,15 +40,27 @@ const SwapStatus = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Set up polling for status updates
+  // Set up polling for status updates. Cadence adapts to the backend's
+  // reported `phase` instead of a fixed interval: fast while a round is
+  // actively in progress (so per-index updates like "Attempting to swap
+  // X -> Y" show up live), slow during the multi-minute idle gap between
+  // rounds, and stopped entirely once the swap reaches a terminal state.
   useEffect(() => {
     if (!sessionId) {
       setError('No session ID provided');
       return;
     }
 
+    let timeoutId;
+    let cancelled = false;
+
+    const scheduleNext = (delayMs) => {
+      if (cancelled) return;
+      timeoutId = setTimeout(fetchStatus, delayMs);
+    };
+
     const fetchStatus = async () => {
-      if (!sessionId) return;
+      if (!sessionId || cancelled) return;
 
       try {
         const response = await axios.get(`${API_BASE_URL}/api/swap-status/${sessionId}`, {
@@ -52,6 +69,13 @@ const SwapStatus = () => {
 
         setSwapData(response.data); // Updates UI with latest status fetched from Redis through the backend API call
         setError('');
+
+        if (response.data.phase === 'done') {
+          return; // Terminal state — nothing left to poll for.
+        }
+        const nextDelay =
+          response.data.phase === 'idle' ? POLL_INTERVAL_IDLE_MS : POLL_INTERVAL_ACTIVE_MS;
+        scheduleNext(nextDelay);
       } catch (error) {
         console.error('Error fetching status:', error);
 
@@ -62,17 +86,18 @@ const SwapStatus = () => {
         }
 
         setError('Failed to fetch swap status');
+        scheduleNext(POLL_INTERVAL_ERROR_MS);
       }
     };
 
     // Fetch swap_status immediately
     fetchStatus();
 
-    // Set up polling every 5 seconds
-    const interval = setInterval(fetchStatus, 5000);
-    
-    // Cleanup interval on component unmount
-    return () => clearInterval(interval);
+    // Cleanup on unmount
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, [sessionId, navigate]);
 
   const handleStopSwap = async () => {
@@ -101,7 +126,7 @@ const SwapStatus = () => {
       navigate('/');
       return;
     }
-    
+
     setLoading(true);
     try {
       const response = await axios.post(`${API_BASE_URL}/api/logout/${sessionId}`, {}, {
@@ -166,11 +191,11 @@ const SwapStatus = () => {
           {error}
         </Alert>
       )}
-      
-      <Card 
-        sx={{ 
-          border: 0, 
-          boxShadow: 2, 
+
+      <Card
+        sx={{
+          border: 0,
+          boxShadow: 2,
           flexGrow: 1,
           display: 'flex',
           flexDirection: 'column'
@@ -185,7 +210,7 @@ const SwapStatus = () => {
                 Swap Status
               </Typography>
             </Box>
-            
+
             <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
               <Box
                 sx={{
@@ -196,13 +221,13 @@ const SwapStatus = () => {
                   mr: 1
                 }}
               />
-              <Chip 
+              <Chip
                 label={swapData.status}
                 color={getStatusColor(swapData.status)}
                 sx={{ fontWeight: 'bold' }}
               />
             </Box>
-            
+
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
               {swapData.message}
             </Typography>
@@ -216,9 +241,9 @@ const SwapStatus = () => {
           </Box>
 
           {/* Scrollable Status Container */}
-          <Box sx={{ 
-            flexGrow: 1, 
-            overflowY: 'auto', 
+          <Box sx={{
+            flexGrow: 1,
+            overflowY: 'auto',
             mb: 3,
             pr: 1
           }}>
@@ -229,13 +254,13 @@ const SwapStatus = () => {
                     <Typography variant="h6" fontWeight="bold">
                       Module {index + 1}
                     </Typography>
-                    <Chip 
+                    <Chip
                       label={detail.swapped ? 'Completed' : 'Pending'}
                       color={detail.swapped ? 'success' : 'default'}
                       size="small"
                     />
                   </Box>
-                  
+
                   <Box sx={{ mb: 2 }}>
                     <Typography variant="caption" color="text.secondary">
                       Old Index
@@ -244,7 +269,7 @@ const SwapStatus = () => {
                       {detail.old_index}
                     </Typography>
                   </Box>
-                  
+
                   <Box sx={{ mb: 2 }}>
                     <Typography variant="caption" color="text.secondary">
                       New Index
@@ -255,13 +280,13 @@ const SwapStatus = () => {
                         : detail.new_indexes}
                     </Typography>
                   </Box>
-                  
+
                   <Box>
                     <Typography variant="caption" color="text.secondary">
                       Status
                     </Typography>
-                    <Typography 
-                      variant="body2" 
+                    <Typography
+                      variant="body2"
                       color={detail.swapped ? 'success.main' : 'text.primary'}
                     >
                       {detail.message}
@@ -288,10 +313,10 @@ const SwapStatus = () => {
                 Stop and Log Out
               </Button>
             )}
-            
-            {(swapData.status === 'Completed' || 
-              swapData.status === 'Error' || 
-              swapData.status === 'Timed Out' || 
+
+            {(swapData.status === 'Completed' ||
+              swapData.status === 'Error' ||
+              swapData.status === 'Timed Out' ||
               swapData.status === 'Stopped') && (
               <Button
                 variant="contained"
