@@ -26,7 +26,7 @@ def _env_int(name: str, default: int) -> int:
 
 # How long a single swap session is allowed to keep retrying before it's
 # marked "Timed Out" and the background thread stops. Default: 2 hours.
-SESSION_TIME_LIMIT_SECONDS = _env_int("SESSION_TIME_LIMIT_SECONDS", 5 * 3600)
+SESSION_TIME_LIMIT_SECONDS = _env_int("SESSION_TIME_LIMIT_SECONDS", 2 * 3600)
 
 # How long to sleep between rounds of attempts once a round finds no
 # vacancies. Default: 5 minutes.
@@ -36,7 +36,7 @@ RETRY_INTERVAL_SECONDS = _env_int("RETRY_INTERVAL_SECONDS", 5 * 60)
 # expiring, and the matching cookie session max-age. Independent of
 # SESSION_TIME_LIMIT_SECONDS above — this is a security/storage TTL, not a
 # "give up retrying" limit — but defaults to the same 2-hour value.
-SESSION_TTL_SECONDS = _env_int("SESSION_TTL_SECONDS", 5 * 3600)
+SESSION_TTL_SECONDS = _env_int("SESSION_TTL_SECONDS", 2 * 3600)
 
 # Number of Chrome/Selenium driver instances kept in the shared pool. This is
 # a hard cap on concurrent browser automation — see setup_driver_pool().
