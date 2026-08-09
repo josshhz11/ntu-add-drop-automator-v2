@@ -1,31 +1,32 @@
+import base64
 import json
+import os
+import platform
+import secrets
+import subprocess
 import threading
+import time
+from datetime import datetime, timezone
+
 import redis
 import uvicorn
-from fastapi import FastAPI, Depends, HTTPException, Request
+from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait, Select
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
+    SessionNotCreatedException,
     TimeoutException,
     WebDriverException,
-    SessionNotCreatedException,
 )
-from dotenv import load_dotenv
-import os
-import time
-from datetime import datetime
-import subprocess
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select, WebDriverWait
 from starlette.middleware.sessions import SessionMiddleware
-import secrets
-from fastapi.middleware.cors import CORSMiddleware
-import platform
-from cryptography.fernet import Fernet
-import base64
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -45,7 +46,7 @@ def check_chrome_paths():
         print(f"ChromeDriver Version: {chromedriver_version}")
 
     except Exception as e:
-        print(f"Error checking paths: {str(e)}")
+        print(f"Error checking paths: {e!s}")
 
 
 def setup_redis_connection():
@@ -54,7 +55,7 @@ def setup_redis_connection():
     def get_redis():
         """Dependency Injection: Returns a Redis connection"""
         redis_host = os.environ.get("REDIS_HOST")
-        redis_port = int(os.environ.get("REDIS_PORT", 6379))
+        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
 
         redis_config = {
             "host": redis_host,
@@ -105,7 +106,7 @@ def create_driver(chrome_options):
         print("ChromeDriver started successfully!")
         return driver
     except Exception as e:
-        print(f"Error creating WebDriver: {str(e)}")
+        print(f"Error creating WebDriver: {e!s}")
         raise
 
 
@@ -129,7 +130,7 @@ def setup_driver_pool(chrome_options, max_drivers=3):
                     print("ChromeDriver started successfully!")
                     return driver
                 except Exception as e:
-                    print(f"Error starting ChromeDriver: {str(e)}")
+                    print(f"Error starting ChromeDriver: {e!s}")
                     raise RuntimeError(
                         f"Failed to start a new Chrome browser instance: {e}"
                     ) from e
@@ -368,11 +369,13 @@ def login_to_portal(
     try:
         # Wait for the URL to either be the expected URL or the alternate URL
         WebDriverWait(driver, 10).until(
-            lambda d: d.current_url
-            in [
-                "https://wish.wis.ntu.edu.sg/pls/webexe/AUS_STARS_PLANNER.planner",
-                "https://wish.wis.ntu.edu.sg/pls/webexe/AUS_STARS_PLANNER.time_table",
-            ]
+            lambda d: (
+                d.current_url
+                in [
+                    "https://wish.wis.ntu.edu.sg/pls/webexe/AUS_STARS_PLANNER.planner",
+                    "https://wish.wis.ntu.edu.sg/pls/webexe/AUS_STARS_PLANNER.time_table",
+                ]
+            )
         )
 
         # Check if redirected to the time_table URL
@@ -462,7 +465,7 @@ def perform_swaps(
                     failed_indexes = []
                     for new_index in item["new_indexes"]:
                         try:
-                            success, message = attempt_swap(
+                            success, _message = attempt_swap(
                                 old_index=item["old_index"],
                                 new_index=new_index,
                                 idx=idx,
@@ -485,7 +488,9 @@ def perform_swaps(
                             else:
                                 failed_indexes.append(new_index)
                         except WebDriverException as e:
-                            log_swap_event(session_id, username, f"WebDriver error: {e}")
+                            log_swap_event(
+                                session_id, username, f"WebDriver error: {e}"
+                            )
                             release_driver(driver)  # Release current driver
                             driver = get_driver()  # Get a new driver
                             login_to_portal(
@@ -535,7 +540,9 @@ def perform_swaps(
                     message="Time limit reached before completing the swap.",
                 )
                 log_swap_event(
-                    session_id, username, "Time limit reached before completing the swap."
+                    session_id,
+                    username,
+                    "Time limit reached before completing the swap.",
                 )
                 break
 
@@ -549,9 +556,9 @@ def perform_swaps(
             time.sleep(5 * 60)
     except Exception as e:
         update_overall_swap_status(
-            redis_db, session_id, status="Error", message=f"An error occurred: {str(e)}"
+            redis_db, session_id, status="Error", message=f"An error occurred: {e!s}"
         )
-        log_swap_event(session_id, username, f"An error occurred: {str(e)}")
+        log_swap_event(session_id, username, f"An error occurred: {e!s}")
     finally:
         if driver:
             release_driver(driver)  # Ensure driver is released back to the pool
@@ -619,7 +626,9 @@ def attempt_swap(
 
         except Exception as e:
             # Handle any unexpected errors
-            error_message = f"Unexpected error locating radio button for index {old_index}: {str(e)}"
+            error_message = (
+                f"Unexpected error locating radio button for index {old_index}: {e!s}"
+            )
             update_module_status(redis_db, session_id, idx, error_message)
             return False, error_message  # Return a value indicating failure
 
@@ -647,7 +656,9 @@ def attempt_swap(
             alert = driver.switch_to.alert
             alert_text = alert.text
             alert.accept()  # Close the alert
-            error_message = "Portal is closed now. Please try again from 10:30am - 10:00pm."
+            error_message = (
+                "Portal is closed now. Please try again from 10:30am - 10:00pm."
+            )
             update_overall_swap_status(
                 redis_db,
                 session_id,
@@ -699,7 +710,7 @@ def attempt_swap(
                 )
             except (IndexError, ValueError) as e:
                 error_message = (
-                    f"Failed to parse vacancies for index {new_index}: {str(e)}"
+                    f"Failed to parse vacancies for index {new_index}: {e!s}"
                 )
                 update_module_status(redis_db, session_id, idx, error_message)
 
@@ -733,7 +744,7 @@ def attempt_swap(
         except Exception as e:
             # Catch any unexpected errors
             error_message = (
-                f"Unexpected error while checking new index {new_index}: {str(e)}"
+                f"Unexpected error while checking new index {new_index}: {e!s}"
             )
             update_overall_swap_status(
                 redis_db, session_id, status="Error", message=error_message
@@ -795,7 +806,9 @@ def attempt_swap(
         WebDriverWait(driver, 10).until(EC.alert_is_present())
 
         alert = driver.switch_to.alert
-        log_swap_event(session_id, username, f"Attempt {attempt_number}: Alert = {alert.text}")
+        log_swap_event(
+            session_id, username, f"Attempt {attempt_number}: Alert = {alert.text}"
+        )
         alert.accept()  # Accept (click OK) on the alert
 
         update_module_status(
@@ -814,7 +827,7 @@ def attempt_swap(
 
     except Exception as e:
         error_message = (
-            f"Error during swap attempt for {old_index} -> {new_index}: {str(e)}"
+            f"Error during swap attempt for {old_index} -> {new_index}: {e!s}"
         )
         update_module_status(redis_db, session_id, idx, error_message)
         return False, error_message
@@ -998,7 +1011,7 @@ def create_app():
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=500, detail=f"Swap initiation failed: {str(e)}"
+                status_code=500, detail=f"Swap initiation failed: {e!s}"
             )
 
     # API route for returning swap_status data to the frontend
@@ -1021,7 +1034,7 @@ def create_app():
             raise
         except Exception as e:
             raise HTTPException(
-                status_code=500, detail=f"Error retrieving status: {str(e)}"
+                status_code=500, detail=f"Error retrieving status: {e!s}"
             )
 
     # API route for stopping swap operation
@@ -1042,9 +1055,7 @@ def create_app():
 
             return {"success": True, "message": "Swap successfully stopped"}
         except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"Error stopping swap: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Error stopping swap: {e!s}")
 
     # API route for logging out once swap is done
     @app.post("/api/logout/{session_id}")
@@ -1059,9 +1070,7 @@ def create_app():
 
             return {"success": True, "message": "Logged out successfully"}
         except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"Error stopping swap: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Error stopping swap: {e!s}")
 
     # API route to test redis connectivity
     @app.get("/api/health")
@@ -1072,13 +1081,13 @@ def create_app():
             return {
                 "status": "healthy",
                 "redis": "connected",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as e:
             return {
                 "status": "unhealthy",
-                "redis": f"disconnected: {str(e)}",
-                "timestamp": datetime.now().isoformat(),
+                "redis": f"disconnected: {e!s}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
     # Testing redis route (for my own usage)
@@ -1089,7 +1098,7 @@ def create_app():
             value = redis_db.get("test_key")
             return {"message": "Redis is working!", "retrieved_value": value}
         except Exception as e:
-            return {"error": f"Redis connection error: {str(e)}"}
+            return {"error": f"Redis connection error: {e!s}"}
 
     # Move this to frontend
     """@app.get('/thumbnail')
@@ -1100,7 +1109,7 @@ def create_app():
         # Ensure the file exists
         if not os.path.exists(image_path):
             raise HTTPException(status_code=404, detail="Thumbnail not found")
-        
+
         return FileResponse(image_path, media_type="image/jpeg")"""
 
     return app
@@ -1116,7 +1125,7 @@ app = create_app()
 
 def main():
     """Start the server when running directly."""
-    port = int(os.environ.get("PORT", 5000))  # Use Render's PORT env var
+    port = int(os.environ.get("PORT", "5000"))  # Use Render's PORT env var
     print(f"Starting server on http://0.0.0.0:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 

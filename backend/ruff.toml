@@ -1,0 +1,12 @@
+[lint]
+ignore = [
+    # Broad `except Exception` is used deliberately throughout this codebase as a
+    # safety net around Selenium/browser automation, which can fail in many
+    # unpredictable ways (stale elements, alerts, timeouts, driver crashes) that
+    # aren't worth enumerating individually.
+    "BLE001",
+    # `Depends(...)` as an argument default is FastAPI's standard dependency-
+    # injection pattern, not the general "mutable default argument" antipattern
+    # this rule is meant to catch.
+    "B008",
+]
