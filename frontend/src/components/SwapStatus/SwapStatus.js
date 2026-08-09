@@ -28,7 +28,9 @@ const SwapStatus = () => {
   const [swapData, setSwapData] = useState({
     status: 'Loading', // Processing, Completed, Error, Timed Out, Stopped
     message: 'Loading swap status...',
-    details: []
+    details: [],
+    attempt_count: 0,
+    last_attempt_at: null
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -128,6 +130,14 @@ const SwapStatus = () => {
     }
   };
 
+  const formatTimestamp = (epochSeconds) => {
+    if (!epochSeconds) return null;
+    return new Date(epochSeconds * 1000).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   const getStatusIndicatorColor = (status) => {
     switch (status.toLowerCase()) {
       case 'completed': return '#4caf50';
@@ -196,6 +206,13 @@ const SwapStatus = () => {
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
               {swapData.message}
             </Typography>
+
+            {swapData.status === 'Processing' && swapData.attempt_count > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                Attempt #{swapData.attempt_count}
+                {swapData.last_attempt_at && ` · Last attempted at ${formatTimestamp(swapData.last_attempt_at)}`}
+              </Typography>
+            )}
           </Box>
 
           {/* Scrollable Status Container */}

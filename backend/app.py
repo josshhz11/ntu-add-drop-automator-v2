@@ -277,6 +277,8 @@ def initialize_swap_in_session(redis_db, session_id: str, swap_items: list) -> N
         "swap_status": "Processing",
         "swap_message": "Your swap request is being processed",
         "swap_started_at": time.time(),
+        "attempt_count": 0,
+        "last_attempt_at": None,
         "modules": [
             {
                 "old_index": item["old_index"],
@@ -313,6 +315,17 @@ def update_overall_swap_status(
     """Update overall swap status in session"""
     updates = {"swap_status": status, "swap_message": message}
     update_session_data(redis_db, session_id, updates)
+
+
+def record_swap_attempt(redis_db, session_id: str, attempt_number: int) -> None:
+    """Persist the attempt number and timestamp for a completed round of swap attempts."""
+    updates = {"attempt_count": attempt_number, "last_attempt_at": time.time()}
+    update_session_data(redis_db, session_id, updates)
+
+
+def log_swap_event(session_id: str, username: str, message: str) -> None:
+    """Print a swap-related log line tagged with the user and session for traceability."""
+    print(f"[{username}] [{session_id[:8]}] {message}")
 
 
 # ============================================================================
@@ -421,6 +434,7 @@ def perform_swaps(
             return
 
         start_time = time.time()
+        attempt_number = 0
         while True:
             # Check if session still exists (user might have stopped it)
             try:
@@ -429,6 +443,18 @@ def perform_swaps(
                     break
             except HTTPException:
                 break  # Session expired or deleted
+
+            attempt_number += 1
+
+            # Let the frontend know a new round of attempts has started, rather than
+            # leaving the overall message stuck on "Logging into NTU portal..." or the
+            # previous round's summary while this round is still in progress.
+            update_overall_swap_status(
+                redis_db,
+                session_id,
+                status="Processing",
+                message=f"Attempting Swap {attempt_number}...",
+            )
 
             # Attempt swaps
             for idx, item in enumerate(swap_items):
@@ -443,6 +469,8 @@ def perform_swaps(
                                 driver=driver,
                                 session_id=session_id,
                                 redis_db=redis_db,
+                                username=username,
+                                attempt_number=attempt_number,
                             )
                             if success:
                                 item["swapped"] = True
@@ -457,7 +485,7 @@ def perform_swaps(
                             else:
                                 failed_indexes.append(new_index)
                         except WebDriverException as e:
-                            print(f"WebDriver error: {e}")
+                            log_swap_event(session_id, username, f"WebDriver error: {e}")
                             release_driver(driver)  # Release current driver
                             driver = get_driver()  # Get a new driver
                             login_to_portal(
@@ -479,6 +507,15 @@ def perform_swaps(
                             f"Indexes {', '.join(failed_indexes)} have no vacancies.",
                         )
 
+            # One full round of attempts across all modules has completed.
+            record_swap_attempt(redis_db, session_id, attempt_number)
+            swapped_count = sum(1 for item in swap_items if item["swapped"])
+            log_swap_event(
+                session_id,
+                username,
+                f"Attempt {attempt_number}: {swapped_count}/{len(swap_items)} modules swapped so far",
+            )
+
             # Check if all items are swapped
             all_swapped = all(item["swapped"] for item in swap_items)
             if all_swapped:
@@ -497,22 +534,38 @@ def perform_swaps(
                     status="Timed Out",
                     message="Time limit reached before completing the swap.",
                 )
-                print("Time limit reached before completing the swap.")
+                log_swap_event(
+                    session_id, username, "Time limit reached before completing the swap."
+                )
                 break
+
+            update_overall_swap_status(
+                redis_db,
+                session_id,
+                status="Processing",
+                message=f"Attempt {attempt_number}: no vacancies found yet. Retrying every 5 minutes.",
+            )
 
             time.sleep(5 * 60)
     except Exception as e:
         update_overall_swap_status(
             redis_db, session_id, status="Error", message=f"An error occurred: {str(e)}"
         )
-        print(f"An error occurred: {str(e)}")
+        log_swap_event(session_id, username, f"An error occurred: {str(e)}")
     finally:
         if driver:
             release_driver(driver)  # Ensure driver is released back to the pool
 
 
 def attempt_swap(
-    old_index: str, new_index: str, idx: int, driver, session_id: str, redis_db
+    old_index: str,
+    new_index: str,
+    idx: int,
+    driver,
+    session_id: str,
+    redis_db,
+    username: str = "",
+    attempt_number: int = 0,
 ) -> tuple:
     """
     Performs swap attempt, updates Redis status, and returns success status.
@@ -639,7 +692,11 @@ def attempt_swap(
                 vacancies = int(
                     option_text.split(" / ")[1]
                 )  # Parse out the middle number (vacancies)
-                print(f"The number of vacancies for index {new_index} is {vacancies}.")
+                log_swap_event(
+                    session_id,
+                    username,
+                    f"Attempt {attempt_number}: Vacancies for index {new_index} = {vacancies}",
+                )
             except (IndexError, ValueError) as e:
                 error_message = (
                     f"Failed to parse vacancies for index {new_index}: {str(e)}"
@@ -738,7 +795,7 @@ def attempt_swap(
         WebDriverWait(driver, 10).until(EC.alert_is_present())
 
         alert = driver.switch_to.alert
-        print(f"Alert text: {alert.text}")
+        log_swap_event(session_id, username, f"Attempt {attempt_number}: Alert = {alert.text}")
         alert.accept()  # Accept (click OK) on the alert
 
         update_module_status(
@@ -957,6 +1014,8 @@ def create_app():
                 "message": session_data.get("swap_message"),
                 "details": session_data.get("modules", []),
                 "started_at": session_data.get("swap_started_at"),
+                "attempt_count": session_data.get("attempt_count", 0),
+                "last_attempt_at": session_data.get("last_attempt_at"),
             }
         except HTTPException:
             raise
