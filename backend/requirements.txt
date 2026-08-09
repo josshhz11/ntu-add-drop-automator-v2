@@ -5,9 +5,7 @@ bs4
 requests
 gunicorn
 redis
-aioredis
 python-dotenv
-asyncio
 python-multipart
 itsdangerous
 starlette>=0.14.0

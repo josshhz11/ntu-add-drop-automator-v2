@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import platform
+import queue
 import secrets
 import subprocess
 import threading
@@ -9,6 +10,7 @@ import time
 from datetime import datetime, timezone
 
 import redis
+import redis.asyncio as redis_asyncio
 import uvicorn
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
@@ -27,6 +29,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 from starlette.middleware.sessions import SessionMiddleware
+
+import config
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -49,35 +53,49 @@ def check_chrome_paths():
         print(f"Error checking paths: {e!s}")
 
 
-def setup_redis_connection():
-    """Set up and return Redis connection."""
+def setup_redis_connections():
+    """Create the shared Redis clients used across the app.
+
+    Two separate clients are created ONCE here and reused for the app's whole
+    lifetime, instead of opening a brand-new connection on every call:
+
+    - An async client for the FastAPI request handlers, so a Redis round-trip
+      no longer blocks the single asyncio event loop while other requests
+      (including every 20s status poll, from every user) wait behind it.
+    - A sync client for the background Selenium threads (`perform_swaps` and
+      friends). Those run on plain OS threads, not inside the event loop, so
+      there is nothing to gain from `await` there and no easy way to do it
+      safely from a non-async thread anyway.
+    """
+    redis_config = {
+        "host": os.environ.get("REDIS_HOST"),
+        "port": int(os.environ.get("REDIS_PORT", "6379")),
+        "password": config.REDIS_PASSWORD,
+        "decode_responses": True,
+        "socket_connect_timeout": 5,
+        "socket_timeout": 5,
+    }
+
+    sync_client = redis.Redis(**redis_config)
+    async_client = redis_asyncio.Redis(**redis_config)
 
     def get_redis():
-        """Dependency Injection: Returns a Redis connection"""
-        redis_host = os.environ.get("REDIS_HOST")
-        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+        """FastAPI dependency: returns the shared async client."""
+        return async_client
 
-        redis_config = {
-            "host": redis_host,
-            "port": redis_port,
-            "decode_responses": True,
-            "socket_connect_timeout": 5,
-            "socket_timeout": 5,
-            "retry_on_timeout": True,
-        }
-
-        return redis.StrictRedis(**redis_config)
-
-    return get_redis
+    return get_redis, sync_client
 
 
-# Configure ChromeDriver settings (Manual for the Windows path configurations)
-CHROME_BINARY_PATH = (
+# Configure ChromeDriver settings. CHROME_BINARY_PATH/CHROMEDRIVER_PATH env
+# vars (e.g. from render.yaml) take priority when set; otherwise fall back to
+# a platform-based guess (Linux for containers, this dev machine's path for
+# Windows).
+CHROME_BINARY_PATH = config.CHROME_BINARY_PATH_OVERRIDE or (
     "/usr/bin/google-chrome"
     if platform.system() == "Linux"
     else "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
 )
-CHROMEDRIVER_PATH = (
+CHROMEDRIVER_PATH = config.CHROMEDRIVER_PATH_OVERRIDE or (
     "/usr/local/bin/chromedriver"
     if platform.system() == "Linux"
     else "C:\\Users\\joshua\\Downloads\\chromedriver-win64\\chromedriver.exe"
@@ -111,34 +129,30 @@ def create_driver(chrome_options):
 
 
 def setup_driver_pool(chrome_options, max_drivers=3):
-    """Set up and return driver pool functions."""
-    driver_pool = []
-    pool_lock = threading.Lock()
+    """Set up a bounded pool of `max_drivers` Chrome driver instances.
+
+    This is a genuine hard cap, not just a warm-start count: `get_driver()`
+    blocks the calling thread when all instances are checked out, instead of
+    spawning an unbounded number of extra Chrome processes. Sessions that call
+    it while the pool is empty queue up for free — `queue.Queue` blocks
+    waiting threads on an internal condition variable and wakes them in the
+    order they started waiting, so no separate wait-list needs to be tracked
+    by hand. Each session's own background thread IS its queue entry while
+    it's blocked here.
+    """
+    driver_pool: queue.Queue = queue.Queue(maxsize=max_drivers)
 
     # Preload ChromeDriver instances
     for _ in range(max_drivers):
-        driver_pool.append(create_driver(chrome_options))
+        driver_pool.put(create_driver(chrome_options))
 
     def get_driver():
-        with pool_lock:
-            if driver_pool:
-                return driver_pool.pop()
-            else:
-                print("Creating new ChromeDriver instance...")
-                try:
-                    driver = create_driver(chrome_options)
-                    print("ChromeDriver started successfully!")
-                    return driver
-                except Exception as e:
-                    print(f"Error starting ChromeDriver: {e!s}")
-                    raise RuntimeError(
-                        f"Failed to start a new Chrome browser instance: {e}"
-                    ) from e
+        """Check out a driver, blocking until one is available if the pool is empty."""
+        return driver_pool.get(block=True)
 
-    # Return driver to the pool
     def release_driver(driver):
-        with pool_lock:
-            driver_pool.append(driver)
+        """Return a driver to the pool, unblocking the longest-waiting caller (if any)."""
+        driver_pool.put(driver)
 
     return get_driver, release_driver
 
@@ -173,6 +187,13 @@ def decrypt_password(encrypted_password: str) -> str:
     return decrypted_password.decode()
 
 
+# ----------------------------------------------------------------------------
+# Sync session helpers — used by the background Selenium thread (perform_swaps
+# and everything it calls), via the shared sync Redis client. Kept sync
+# because that thread is a plain OS thread, not a coroutine.
+# ----------------------------------------------------------------------------
+
+
 def create_secure_session(redis_db, username: str, password: str) -> str:
     """Create secure session with encrypted credentials in Redis"""
     session_id = secrets.token_urlsafe(32)
@@ -180,22 +201,25 @@ def create_secure_session(redis_db, username: str, password: str) -> str:
     # Encrypt password before storing
     encrypted_password = encrypt_password(password)
 
-    # Store in Redis with 2-hour TTL (7200 seconds)
+    # Store in Redis with a configurable TTL (defaults to 2 hours)
     session_data = {
         "username": username,
         "encrypted_password": encrypted_password,
         "authenticated": True,
         "created_at": time.time(),
-        "expires_at": time.time() + 7200,  # 2 hours
+        "expires_at": time.time() + config.SESSION_TTL_SECONDS,
         # Swap status info (initially empty)
         "swap_status": "Idle",  # Idle, Processing, Completed, Error, Stopped, Timed Out
         "swap_message": None,
         "swap_started_at": None,
+        "swap_phase": "done",  # nothing to poll for until a swap is submitted
         # Module data (initially empty, populated when swap starts)
         "modules": [],
     }
 
-    redis_db.setex(f"session:{session_id}", 7200, json.dumps(session_data))
+    redis_db.setex(
+        f"session:{session_id}", config.SESSION_TTL_SECONDS, json.dumps(session_data)
+    )
     return session_id
 
 
@@ -240,18 +264,124 @@ def get_decrypted_credentials(redis_db, session_id: str) -> tuple:
     return username, password
 
 
+# ----------------------------------------------------------------------------
+# Async session helpers — used by the FastAPI request handlers, via the
+# shared async Redis client, so a Redis round-trip never blocks the event
+# loop while other requests (e.g. every other user's status poll) wait on it.
+# Mirror the sync versions above one-for-one; kept separate rather than
+# shared because the background thread cannot safely `await`.
+# ----------------------------------------------------------------------------
+
+
+async def create_secure_session_async(redis_db, username: str, password: str) -> str:
+    """Async counterpart of create_secure_session, for use in request handlers."""
+    session_id = secrets.token_urlsafe(32)
+
+    encrypted_password = encrypt_password(password)
+
+    session_data = {
+        "username": username,
+        "encrypted_password": encrypted_password,
+        "authenticated": True,
+        "created_at": time.time(),
+        "expires_at": time.time() + config.SESSION_TTL_SECONDS,
+        "swap_status": "Idle",  # Idle, Processing, Completed, Error, Stopped, Timed Out
+        "swap_message": None,
+        "swap_started_at": None,
+        "swap_phase": "done",  # nothing to poll for until a swap is submitted
+        "modules": [],
+    }
+
+    await redis_db.setex(
+        f"session:{session_id}", config.SESSION_TTL_SECONDS, json.dumps(session_data)
+    )
+    return session_id
+
+
+async def get_secure_session_async(redis_db, session_id: str) -> dict:
+    """Async counterpart of get_secure_session, for use in request handlers."""
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session ID provided")
+
+    session_data_json = await redis_db.get(f"session:{session_id}")
+    if not session_data_json:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    session_data = json.loads(session_data_json)
+
+    if time.time() > session_data.get("expires_at", 0):
+        await redis_db.delete(f"session:{session_id}")
+        raise HTTPException(status_code=401, detail="Session expired.")
+
+    return session_data
+
+
+async def update_session_data_async(redis_db, session_id: str, updates: dict) -> None:
+    """Async counterpart of update_session_data, for use in request handlers."""
+    session_data = await get_secure_session_async(redis_db, session_id)
+    session_data.update(updates)
+
+    ttl = await redis_db.ttl(f"session:{session_id}")
+    if ttl > 0:
+        await redis_db.setex(f"session:{session_id}", ttl, json.dumps(session_data))
+
+
+async def get_decrypted_credentials_async(redis_db, session_id: str) -> tuple:
+    """Async counterpart of get_decrypted_credentials, for use in request handlers."""
+    session_data = await get_secure_session_async(redis_db, session_id)
+
+    username = session_data["username"]
+    encrypted_password = session_data["encrypted_password"]
+    password = decrypt_password(encrypted_password)
+
+    return username, password
+
+
+async def update_overall_swap_status_async(
+    redis_db, session_id: str, status: str, message: str, phase: str = "active"
+) -> None:
+    """Async counterpart of update_overall_swap_status, for use in request handlers."""
+    updates = {"swap_status": status, "swap_message": message, "swap_phase": phase}
+    await update_session_data_async(redis_db, session_id, updates)
+
+
+async def initialize_swap_in_session_async(
+    redis_db, session_id: str, swap_items: list
+) -> None:
+    """Async counterpart of initialize_swap_in_session, for use in request handlers."""
+    updates = {
+        "swap_status": "Processing",
+        "swap_message": "Your swap request is being processed",
+        "swap_started_at": time.time(),
+        "swap_phase": "active",
+        "attempt_count": 0,
+        "last_attempt_at": None,
+        "modules": [
+            {
+                "old_index": item["old_index"],
+                "new_indexes": item["new_indexes"],
+                "swapped": False,
+                "message": "Pending...",
+            }
+            for item in swap_items
+        ],
+    }
+    await update_session_data_async(redis_db, session_id, updates)
+
+
 # ============================================================================
 # GLOBAL VARIABLES (Will be initialized in main())
 # ============================================================================
 
 get_redis = None
+redis_sync_client = None
 get_driver = None
 release_driver = None
 
 
 def initialize_components() -> None:
     """Initialize all components needed by the app."""
-    global get_redis, get_driver, release_driver
+    global get_redis, redis_sync_client, get_driver, release_driver
 
     print("Loading environment variables...")
     load_dotenv()
@@ -260,11 +390,13 @@ def initialize_components() -> None:
     check_chrome_paths()
 
     print("Setting up Redis connection...")
-    get_redis = setup_redis_connection()
+    get_redis, redis_sync_client = setup_redis_connections()
 
     print("Setting up Chrome WebDriver pool...")
     chrome_options = setup_chrome_options()
-    get_driver, release_driver = setup_driver_pool(chrome_options, max_drivers=3)
+    get_driver, release_driver = setup_driver_pool(
+        chrome_options, max_drivers=config.MAX_DRIVERS
+    )
 
 
 # ============================================================================
@@ -278,6 +410,7 @@ def initialize_swap_in_session(redis_db, session_id: str, swap_items: list) -> N
         "swap_status": "Processing",
         "swap_message": "Your swap request is being processed",
         "swap_started_at": time.time(),
+        "swap_phase": "active",
         "attempt_count": 0,
         "last_attempt_at": None,
         "modules": [
@@ -311,10 +444,21 @@ def update_module_status(
 
 
 def update_overall_swap_status(
-    redis_db, session_id: str, status: str, message: str
+    redis_db, session_id: str, status: str, message: str, phase: str = "active"
 ) -> None:
-    """Update overall swap status in session"""
-    updates = {"swap_status": status, "swap_message": message}
+    """Update overall swap status in session.
+
+    `phase` drives the frontend's polling cadence, since a fixed interval
+    can't be both fast enough to show live per-index progress and slow
+    enough to not waste requests during a 5-minute idle gap:
+      - "active": the browser is doing something right now (waiting for a
+        driver, logging in, working through indexes) — poll frequently.
+      - "idle": between attempt rounds — nothing will change until the next
+        round starts, so poll infrequently.
+      - "done": a terminal state (Completed/Error/Timed Out/Stopped) —
+        nothing will ever change again, so the frontend can stop polling.
+    """
+    updates = {"swap_status": status, "swap_message": message, "swap_phase": phase}
     update_session_data(redis_db, session_id, updates)
 
 
@@ -394,7 +538,11 @@ def login_to_portal(
                     "Unable to find or click the 'Plan/ Registration' button."
                 )
                 update_overall_swap_status(
-                    redis_db, session_id, status="Error", message=error_message
+                    redis_db,
+                    session_id,
+                    status="Error",
+                    message=error_message,
+                    phase="done",
                 )
                 return False
 
@@ -411,7 +559,7 @@ def login_to_portal(
         # If login fails, update status and exit
         error_message = "Incorrect username/password. Please try again."
         update_overall_swap_status(
-            redis_db, session_id, status="Error", message=error_message
+            redis_db, session_id, status="Error", message=error_message, phase="done"
         )
         return False
 
@@ -419,23 +567,15 @@ def login_to_portal(
 def perform_swaps(
     username: str, password: str, swap_items: list, session_id: str, redis_db
 ):
+    # `driver` is only ever held while a round of attempts is actually in
+    # progress. It is checked out fresh from the pool at the top of each
+    # round and released back before the 5-minute sleep, instead of being
+    # held for the entire (up to 2-hour) session lifetime — this is what lets
+    # a small driver pool serve far more concurrent sessions than its size,
+    # since most of a session's lifetime is spent asleep, not driving Chrome.
     driver = None
 
     try:
-        # Browser setup
-        driver = get_driver()
-
-        # Update status
-        update_overall_swap_status(
-            redis_db, session_id, "Processing", "Logging into NTU portal..."
-        )
-
-        login_success = login_to_portal(
-            driver, username, password, session_id, redis_db
-        )
-        if not login_success:
-            return
-
         start_time = time.time()
         attempt_number = 0
         while True:
@@ -449,15 +589,31 @@ def perform_swaps(
 
             attempt_number += 1
 
-            # Let the frontend know a new round of attempts has started, rather than
-            # leaving the overall message stuck on "Logging into NTU portal..." or the
-            # previous round's summary while this round is still in progress.
+            # Let the frontend know this session is waiting its turn for a
+            # browser if the pool is fully checked out right now — get_driver()
+            # blocks below until one frees up.
+            update_overall_swap_status(
+                redis_db,
+                session_id,
+                status="Processing",
+                message="Waiting for an available browser slot...",
+            )
+            driver = get_driver()
+
+            # A driver from the shared pool has no memory of this session's
+            # login (it may have just served a different session entirely),
+            # so log in fresh every round rather than assuming it's still valid.
             update_overall_swap_status(
                 redis_db,
                 session_id,
                 status="Processing",
                 message=f"Attempting Swap {attempt_number}...",
             )
+            login_success = login_to_portal(
+                driver, username, password, session_id, redis_db
+            )
+            if not login_success:
+                return
 
             # Attempt swaps
             for idx, item in enumerate(swap_items):
@@ -513,6 +669,11 @@ def perform_swaps(
                         )
 
             # One full round of attempts across all modules has completed.
+            # Hand the driver back to the pool now, before the 5-minute sleep,
+            # so other waiting sessions can use it in the meantime.
+            release_driver(driver)
+            driver = None
+
             record_swap_attempt(redis_db, session_id, attempt_number)
             swapped_count = sum(1 for item in swap_items if item["swapped"])
             log_swap_event(
@@ -529,15 +690,17 @@ def perform_swaps(
                     session_id,
                     status="Completed",
                     message="All modules have been successfully swapped.",
+                    phase="done",
                 )
                 break
 
-            if time.time() - start_time >= 2 * 3600:
+            if time.time() - start_time >= config.SESSION_TIME_LIMIT_SECONDS:
                 update_overall_swap_status(
                     redis_db,
                     session_id,
                     status="Timed Out",
                     message="Time limit reached before completing the swap.",
+                    phase="done",
                 )
                 log_swap_event(
                     session_id,
@@ -546,17 +709,26 @@ def perform_swaps(
                 )
                 break
 
+            retry_minutes = config.RETRY_INTERVAL_SECONDS / 60
             update_overall_swap_status(
                 redis_db,
                 session_id,
                 status="Processing",
-                message=f"Attempt {attempt_number}: no vacancies found yet. Retrying every 5 minutes.",
+                message=(
+                    f"Attempt {attempt_number}: no vacancies found yet. "
+                    f"Retrying every {retry_minutes:g} minutes."
+                ),
+                phase="idle",
             )
 
-            time.sleep(5 * 60)
+            time.sleep(config.RETRY_INTERVAL_SECONDS)
     except Exception as e:
         update_overall_swap_status(
-            redis_db, session_id, status="Error", message=f"An error occurred: {e!s}"
+            redis_db,
+            session_id,
+            status="Error",
+            message=f"An error occurred: {e!s}",
+            phase="done",
         )
         log_swap_event(session_id, username, f"An error occurred: {e!s}")
     finally:
@@ -873,7 +1045,7 @@ def create_app():
         secret_key=SECRET_KEY,
         same_site="none",
         https_only=True,
-        max_age=7200,  # 2h session timeout
+        max_age=config.SESSION_TTL_SECONDS,
     )
 
     # CORS configuration for React development
@@ -929,7 +1101,7 @@ def create_app():
             raise HTTPException(status_code=400, detail="Invalid credentials")
 
         # Create secure session in Redis
-        session_id = create_secure_session(
+        session_id = await create_secure_session_async(
             redis_db, login_data.username, login_data.password
         )
 
@@ -951,7 +1123,9 @@ def create_app():
                 raise HTTPException(status_code=401, detail="No active session")
 
             # Get decrypted credentials from Redis
-            username, password = get_decrypted_credentials(redis_db, session_id)
+            username, password = await get_decrypted_credentials_async(
+                redis_db, session_id
+            )
 
             # Validate credentials again for security
             if not validate_login(username, password):
@@ -991,12 +1165,14 @@ def create_app():
                 )
 
             # Initialize swap data in the existing session
-            initialize_swap_in_session(redis_db, session_id, swap_items)
+            await initialize_swap_in_session_async(redis_db, session_id, swap_items)
 
-            # Start background thread for to execute the swap operation
+            # Start background thread to execute the swap operation. It gets the
+            # shared SYNC Redis client (not the async `redis_db` used above) —
+            # the thread is a plain OS thread, not a coroutine, so it can't await.
             thread = threading.Thread(
                 target=perform_swaps,
-                args=(username, password, swap_items, session_id, redis_db),
+                args=(username, password, swap_items, session_id, redis_sync_client),
                 daemon=True,
             )
             thread.start()
@@ -1019,7 +1195,7 @@ def create_app():
     async def api_get_swap_status(session_id: str, redis_db=Depends(get_redis)):
         """Get swap status from session data in Redis"""
         try:
-            session_data = get_secure_session(redis_db, session_id)
+            session_data = await get_secure_session_async(redis_db, session_id)
 
             # Return swap-specific data
             return {
@@ -1029,6 +1205,7 @@ def create_app():
                 "started_at": session_data.get("swap_started_at"),
                 "attempt_count": session_data.get("attempt_count", 0),
                 "last_attempt_at": session_data.get("last_attempt_at"),
+                "phase": session_data.get("swap_phase", "active"),
             }
         except HTTPException:
             raise
@@ -1045,12 +1222,12 @@ def create_app():
         """Stop swap and clean up session"""
         try:
             # Update swap status to stopped
-            update_overall_swap_status(
-                redis_db, session_id, "Stopped", "Swap stopped by user"
+            await update_overall_swap_status_async(
+                redis_db, session_id, "Stopped", "Swap stopped by user", phase="done"
             )
 
             # Clean up session
-            redis_db.delete(f"session:{session_id}")
+            await redis_db.delete(f"session:{session_id}")
             request.session.clear()
 
             return {"success": True, "message": "Swap successfully stopped"}
@@ -1065,7 +1242,7 @@ def create_app():
         """Clean logout after swap is done"""
         try:
             # Clean up session
-            redis_db.delete(f"session:{session_id}")
+            await redis_db.delete(f"session:{session_id}")
             request.session.clear()
 
             return {"success": True, "message": "Logged out successfully"}
@@ -1077,7 +1254,7 @@ def create_app():
     async def health_check(redis_db=Depends(get_redis)):
         try:
             # Test Redis connection
-            redis_db.ping()
+            await redis_db.ping()
             return {
                 "status": "healthy",
                 "redis": "connected",
@@ -1094,8 +1271,8 @@ def create_app():
     @app.get("/test-redis")
     async def test_redis(redis_db=Depends(get_redis)):
         try:
-            redis_db.set("test_key", "Hello, Redis!")
-            value = redis_db.get("test_key")
+            await redis_db.set("test_key", "Hello, Redis!")
+            value = await redis_db.get("test_key")
             return {"message": "Redis is working!", "retrieved_value": value}
         except Exception as e:
             return {"error": f"Redis connection error: {e!s}"}

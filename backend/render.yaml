@@ -3,7 +3,7 @@ services:
     type: web
     runtime: docker
     repo: https://github.com/josshhz11/ntu-add-drop-automator-v2
-    branch: backend
+    branch: main
     startCommand: uvicorn app:app --host 0.0.0.0 --port 5000
     envVars:
       - key: REDIS_HOST
@@ -23,6 +23,16 @@ services:
           property: password
       - key: CHROMEDRIVER_PATH
         value: "/usr/local/bin/chromedriver"
+      # Free tier is ~512MB RAM; measured usage is ~210MB with 1 driver vs.
+      # ~380MB with 2 — keep this at 1 unless you've upgraded the plan.
+      - key: MAX_DRIVERS
+        value: "1"
+      # Secrets — intentionally left blank here (sync: false) so Render
+      # prompts for them in the dashboard instead of storing values in git.
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: SECRET_KEY
+        sync: false
     plan: free
     autoDeploy: true
     env: docker
