@@ -52,3 +52,9 @@ REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD") or None
 # container — without reading it here, that env var was previously a no-op.
 CHROME_BINARY_PATH_OVERRIDE = os.environ.get("CHROME_BINARY_PATH")
 CHROMEDRIVER_PATH_OVERRIDE = os.environ.get("CHROMEDRIVER_PATH")
+
+# Which storage backend holds session/swap state: "redis" (default, for the
+# shared hosted deployment, where multiple concurrent users need state
+# coordinated across one server) or "memory" (for a local single-user run,
+# where there's no Redis process to install or manage). See storage.py.
+STORAGE_BACKEND = os.environ.get("STORAGE_BACKEND", "redis").lower()

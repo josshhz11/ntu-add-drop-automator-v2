@@ -31,6 +31,7 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 from starlette.middleware.sessions import SessionMiddleware
 
 import config
+import storage
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -53,20 +54,32 @@ def check_chrome_paths():
         print(f"Error checking paths: {e!s}")
 
 
-def setup_redis_connections():
-    """Create the shared Redis clients used across the app.
+def setup_storage_backends():
+    """Create the shared storage clients used across the app.
 
     Two separate clients are created ONCE here and reused for the app's whole
     lifetime, instead of opening a brand-new connection on every call:
 
-    - An async client for the FastAPI request handlers, so a Redis round-trip
-      no longer blocks the single asyncio event loop while other requests
-      (including every 20s status poll, from every user) wait behind it.
+    - An async client for the FastAPI request handlers, so a round-trip to
+      the backing store never blocks the single asyncio event loop while
+      other requests (including every status poll, from every user) wait
+      behind it.
     - A sync client for the background Selenium threads (`perform_swaps` and
       friends). Those run on plain OS threads, not inside the event loop, so
       there is nothing to gain from `await` there and no easy way to do it
       safely from a non-async thread anyway.
+
+    Which backend actually gets used is controlled by `config.STORAGE_BACKEND`:
+    "redis" (default) for the shared hosted deployment, or "memory" for a
+    local single-user run with no Redis process to install or manage. Every
+    caller elsewhere in the app talks to whichever one comes back through the
+    exact same interface (`get`/`setex`/`ttl`/`delete`/`ping`/`set`), so
+    nothing else in the codebase needs to know or care which is active.
     """
+    if config.STORAGE_BACKEND == "memory":
+        memory_store = storage.InMemoryStorage()
+        return (lambda: storage.InMemoryStorageAsync(memory_store)), memory_store
+
     redis_config = {
         "host": os.environ.get("REDIS_HOST"),
         "port": int(os.environ.get("REDIS_PORT", "6379")),
@@ -389,8 +402,8 @@ def initialize_components() -> None:
     print("Checking Chrome installations...")
     check_chrome_paths()
 
-    print("Setting up Redis connection...")
-    get_redis, redis_sync_client = setup_redis_connections()
+    print(f"Setting up storage backend ({config.STORAGE_BACKEND})...")
+    get_redis, redis_sync_client = setup_storage_backends()
 
     print("Setting up Chrome WebDriver pool...")
     chrome_options = setup_chrome_options()
@@ -1249,20 +1262,23 @@ def create_app():
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error stopping swap: {e!s}")
 
-    # API route to test redis connectivity
+    # API route to test storage backend connectivity
     @app.get("/api/health")
     async def health_check(redis_db=Depends(get_redis)):
         try:
-            # Test Redis connection
+            # Test storage backend connection (Redis, or the in-memory
+            # stand-in — see config.STORAGE_BACKEND)
             await redis_db.ping()
             return {
                 "status": "healthy",
-                "redis": "connected",
+                "storage_backend": config.STORAGE_BACKEND,
+                "redis": "connected",  # kept for backwards compatibility
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         except Exception as e:
             return {
                 "status": "unhealthy",
+                "storage_backend": config.STORAGE_BACKEND,
                 "redis": f"disconnected: {e!s}",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
