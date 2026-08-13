@@ -1,0 +1,28 @@
+name: Keep Render App Awake (Add/Drop Period Only)
+
+# Render's free tier spins the web service down after ~15 minutes with no
+# incoming requests, so the first real visitor during that window eats a
+# slow cold start. This pings the health endpoint every 10 minutes to keep
+# it warm — but only during NTU's actual add/drop periods (January and
+# August, via the cron month field below), so it doesn't burn through
+# Render's monthly free-hour quota the other 10 months of the year for a
+# service nobody's using.
+#
+# NOTE: GitHub automatically disables scheduled workflows after 60 days of
+# repository inactivity (no commits). If this doesn't seem to be firing when
+# an add/drop period starts, check Actions -> this workflow -> re-enable it.
+
+on:
+  schedule:
+    - cron: '*/10 * * 1,8 *' # every 10 minutes, January and August only
+  workflow_dispatch: {} # allows a manual one-off run from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -sf https://ntu-add-drop-automator-v2.onrender.com/api/health \
+            && echo "Ping succeeded" \
+            || echo "Ping failed (app may be cold-starting or down)"
