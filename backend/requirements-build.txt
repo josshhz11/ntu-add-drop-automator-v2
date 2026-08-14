@@ -1,0 +1,6 @@
+# Build-only tooling for producing the local desktop distributable.
+# Not a runtime dependency — never needed by the Docker image, Render, or
+# the packaged executable itself, only by whoever's machine is running
+# build_local_release.py to produce a release. Install with:
+#   pip install -r requirements.txt -r requirements-build.txt
+pyinstaller

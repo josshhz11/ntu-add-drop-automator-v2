@@ -34,6 +34,12 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+__pycache__/
+
+# PyInstaller — regenerated identically by desktop/build_local_release.py
+# every run, so committing it risks someone editing it directly and
+# silently drifting from what the build script actually specifies.
+desktop/*.spec
 
 # Logs
 *.log

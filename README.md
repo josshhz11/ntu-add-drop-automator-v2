@@ -8,6 +8,25 @@ Feel free to check out the [project here!](https://ntu-add-drop-automator.vercel
 
 <img width="1301" alt="NTU Add-Drop Automator Home Page" src="https://github.com/josshhz11/ntu-add-drop-automator-v3/blob/main/assets/NTU-Add-Drop-Automator-Home-Page.png">
 
+## Run It Locally — No Setup Required (Windows)
+
+Prefer to run everything on your own computer instead of using the hosted site? There's a standalone version that needs nothing installed except Google Chrome — no Python, no Node, no Docker, no Redis, no config files.
+
+1. Go to the [Releases page](releases) and download `NTU-AddDrop-Automator.exe` (Windows) from the latest release.
+2. Double-click it.
+3. A console window will open (this is normal — it's just showing status/log output), and a few seconds later your default browser will automatically open to the app.
+4. Log in with your real NTU credentials and submit your swap request exactly as you would on the hosted site.
+
+That's it — no accounts to create, no servers to configure. Your credentials and swap data stay entirely on your own machine and are never sent anywhere except NTU's own portal.
+
+**The only prerequisite is having Google Chrome already installed.** If it isn't, the app will tell you so clearly instead of crashing.
+
+**To stop it**, just close the console window — this shuts down the server and cancels any swap attempt in progress.
+
+**Advanced/power users**: settings like how long a swap session keeps retrying, or how many browser instances run in parallel, can be customized by creating a `config.env` file in the same folder as the `.exe` (see `backend/config.py` for the full list of available settings and their defaults). Most users will never need this — the defaults are tuned for a single local user.
+
+*macOS/Linux builds are produced by the same pipeline but haven't been verified on real hardware yet — check the [Releases page](releases) for availability.*
+
 ## Features
 
 - **Redis Database:** Stores detailed information on each user's NTU portal credentials (encrypted) and swap sessions (including unique session ID, old and new indexes, and swap status).
@@ -72,7 +91,7 @@ Before running this project locally, ensure you have the following installed:
   - Body: `{"username": "ntu_username", "password": "ntu_password", "num_modules": 2}`
   - Response: `{"success": true, "session_id": "unique_session_id", "num_modules": 2}`
 
-### Course Swapping  
+### Course Swapping
 - **POST** `/api/submit-swap`
   - Body: `{"num_modules": 2, "modules": [{"old_index": "12345", "new_indexes": "12346,12347"}]}`
   - Response: `{"success": true, "session_id": "session_id", "message": "Swap process started"}`

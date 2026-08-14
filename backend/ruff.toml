@@ -1,3 +1,8 @@
+# Deployment target is Python 3.9 (see Dockerfile, CI). Without this, ruff
+# infers a newer default and suggests 3.10+-only syntax (e.g. `X | None`
+# instead of `Optional[X]`) that would break at runtime on 3.9.
+target-version = "py39"
+
 [lint]
 ignore = [
     # Broad `except Exception` is used deliberately throughout this codebase as a
