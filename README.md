@@ -12,7 +12,7 @@ Feel free to check out the [project here!](https://ntu-add-drop-automator.vercel
 
 Prefer to run everything on your own computer instead of using the hosted site? There's a standalone version that needs nothing installed except Google Chrome — no Python, no Node, no Docker, no Redis, no config files.
 
-1. Go to the [Releases page](releases) and download `NTU-AddDrop-Automator.exe` (Windows) from the latest release.
+1. Go to the [Releases page](https://github.com/josshhz11/ntu-add-drop-automator-v2/releases) and download `NTU-AddDrop-Automator.exe` (Windows) from the latest release.
 2. Double-click it.
 3. A console window will open (this is normal — it's just showing status/log output), and a few seconds later your default browser will automatically open to the app.
 4. Log in with your real NTU credentials and submit your swap request exactly as you would on the hosted site.
@@ -25,7 +25,7 @@ That's it — no accounts to create, no servers to configure. Your credentials a
 
 **Advanced/power users**: settings like how long a swap session keeps retrying, or how many browser instances run in parallel, can be customized by creating a `config.env` file in the same folder as the `.exe` (see `backend/config.py` for the full list of available settings and their defaults). Most users will never need this — the defaults are tuned for a single local user.
 
-*macOS/Linux builds are produced by the same pipeline but haven't been verified on real hardware yet — check the [Releases page](releases) for availability.*
+*macOS/Linux builds are produced by the same pipeline but haven't been verified on real hardware yet — check the [Releases page](https://github.com/josshhz11/ntu-add-drop-automator-v2/releases) for availability.*
 
 ## Features
 
