@@ -1,0 +1,97 @@
+name: Build Desktop Release
+
+# Builds the standalone local desktop distributable (see
+# desktop/build_local_release.py) for Windows, macOS, and Linux.
+# PyInstaller can't cross-compile, so each OS's build has to actually run on
+# that OS — hence the matrix below, one job per platform, each producing its
+# own native executable. Each build is smoke-tested (desktop/smoke_test.py):
+# launched for real and polled until its health endpoint responds, so a
+# build that's broken at startup fails the job instead of shipping quietly.
+#
+# IMPORTANT — what the smoke test does NOT prove: it launches the
+# freshly-built binary directly on the runner, which is not the same
+# situation as an end user opening a *downloaded* copy. macOS in particular
+# marks downloaded files with a quarantine flag that triggers Gatekeeper's
+# "unidentified developer" warning on first launch — something a CI-local
+# run never encounters, so a green macOS job here does not mean a real user
+# can just double-click the download without extra steps (right-click ->
+# Open, or paying for an Apple Developer account to code-sign/notarize).
+# Only the Windows build has been manually verified against this exact
+# concern (built, run, and smoke-tested end-to-end outside of CI too). Check
+# real user experience on macOS/Linux before wide distribution, not just
+# this workflow's checkmark.
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "desktop-v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: NTU-AddDrop-Automator-windows
+          - os: macos-latest
+            artifact_name: NTU-AddDrop-Automator-macos
+          - os: ubuntu-latest
+            artifact_name: NTU-AddDrop-Automator-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "latest"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r backend/requirements-build.txt
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Build local release
+        run: python desktop/build_local_release.py
+
+      - name: Smoke test the built executable
+        run: python desktop/smoke_test.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: desktop/dist/*
+          if-no-files-found: error
+
+  release:
+    # Only runs when triggered by a "desktop-v*" tag push, not on a manual
+    # workflow_dispatch run (which just produces artifacts to download and
+    # inspect, without publishing anything).
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/**/*
+          generate_release_notes: true

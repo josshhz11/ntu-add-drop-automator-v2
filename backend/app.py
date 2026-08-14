@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import json
 import os
@@ -5,8 +7,10 @@ import platform
 import queue
 import secrets
 import subprocess
+import sys
 import threading
 import time
+import webbrowser
 from datetime import datetime, timezone
 
 import redis
@@ -16,6 +20,7 @@ from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from selenium import webdriver
 from selenium.common.exceptions import (
@@ -29,6 +34,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 from starlette.middleware.sessions import SessionMiddleware
+from webdriver_manager.chrome import ChromeDriverManager
 
 import config
 import storage
@@ -115,10 +121,30 @@ CHROMEDRIVER_PATH = config.CHROMEDRIVER_PATH_OVERRIDE or (
 )
 
 
+def get_frontend_build_dir() -> str | None:
+    """Resolve the path to the built frontend's static files, if bundled.
+
+    When packaged with PyInstaller, bundled data files are extracted to a
+    temp directory exposed as `sys._MEIPASS` at runtime. When running from
+    source (dev, or the hosted Docker image — which never ships a frontend
+    build at all, since Vercel serves it separately), this looks for a
+    `frontend_build` folder next to app.py instead. Returns None if neither
+    exists, so callers can skip mounting it entirely.
+    """
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    candidate = os.path.join(base_dir, "frontend_build")
+    return candidate if os.path.isdir(candidate) else None
+
+
 def setup_chrome_options():
     """Configure and return Chrome options."""
     chrome_options = Options()
-    chrome_options.binary_location = CHROME_BINARY_PATH
+    if config.RUN_MODE != "local":
+        # Server/container deployments need an explicit binary path. A local
+        # desktop build leaves this unset so Selenium auto-detects whatever
+        # Chrome install actually exists on the user's machine, instead of
+        # assuming one specific hardcoded path that likely doesn't match.
+        chrome_options.binary_location = CHROME_BINARY_PATH
     chrome_options.add_argument("--headless")  # Headless mode
     chrome_options.add_argument("--disable-gpu")  # Fixes rendering issues
     chrome_options.add_argument("--no-sandbox")  # Required for running as root
@@ -132,7 +158,15 @@ def create_driver(chrome_options):
     """Create and return a new Selenium WebDriver instance."""
     try:
         print("Starting ChromeDriver...")
-        service = Service(CHROMEDRIVER_PATH)  # Ensure correct path
+        if config.RUN_MODE == "local":
+            # Auto-detect whatever Chrome is installed and download a
+            # matching driver, cached locally after the first run — no
+            # assumption about install paths, works across machines/OSes
+            # unmodified. This is the local-build equivalent of the
+            # dynamic version-matching the Dockerfile does at build time.
+            service = Service(ChromeDriverManager().install())
+        else:
+            service = Service(CHROMEDRIVER_PATH)  # Ensure correct path
         driver = webdriver.Chrome(service=service, options=chrome_options)
         print("ChromeDriver started successfully!")
         return driver
@@ -175,12 +209,31 @@ def setup_driver_pool(chrome_options, max_drivers=3):
 # ============================================================================
 
 
+_generated_encryption_key = None
+
+
 def get_encryption_key():
-    """Get encryption key from environment variables."""
+    """Get encryption key from environment variables.
+
+    In RUN_MODE=local, if none is set, generate one for this process's
+    lifetime instead of requiring a non-technical user to configure a
+    secret manually. This is safe: in local mode, session state (including
+    encrypted passwords) is held in the in-memory storage backend, which
+    doesn't survive a restart anyway — so a fresh per-run key is exactly as
+    correct as a persisted one, with none of the setup burden.
+    """
+    global _generated_encryption_key
+
     key = os.environ.get("ENCRYPTION_KEY")
-    if not key:
-        raise ValueError("ENCRYPTION_KEY environment variable is required.")
-    return key.encode()
+    if key:
+        return key.encode()
+
+    if config.RUN_MODE == "local":
+        if _generated_encryption_key is None:
+            _generated_encryption_key = Fernet.generate_key()
+        return _generated_encryption_key
+
+    raise ValueError("ENCRYPTION_KEY environment variable is required.")
 
 
 def encrypt_password(password: str) -> str:
@@ -1053,11 +1106,18 @@ def create_app():
 
     # Generate a random secret key for session encryption
     SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+    # The hosted deployment serves the frontend (Vercel) and backend (Render)
+    # from different origins over HTTPS, which requires SameSite=None +
+    # Secure cookies. A local build serves both from the same plain-HTTP
+    # localhost origin — SameSite=None without Secure is rejected outright by
+    # browsers, and Secure cookies aren't sent over plain HTTP in the first
+    # place, so those settings would silently break login entirely locally.
+    is_local = config.RUN_MODE == "local"
     app.add_middleware(
         SessionMiddleware,
         secret_key=SECRET_KEY,
-        same_site="none",
-        https_only=True,
+        same_site="lax" if is_local else "none",
+        https_only=not is_local,
         max_age=config.SESSION_TTL_SECONDS,
     )
 
@@ -1305,6 +1365,20 @@ def create_app():
 
         return FileResponse(image_path, media_type="image/jpeg")"""
 
+    # Serve the built frontend from this same process/port when it's been
+    # bundled alongside the backend (the local desktop build). This mount
+    # must come after every @app.get/@app.post route above — Starlette
+    # matches routes in registration order, and with html=True this acts as
+    # a catch-all that would otherwise shadow the API routes. The hosted
+    # deployment never ships a frontend_build directory (it's served
+    # separately by Vercel instead), so this is skipped there entirely.
+    frontend_build_dir = get_frontend_build_dir()
+    if frontend_build_dir:
+        print(f"Serving bundled frontend from {frontend_build_dir}")
+        app.mount(
+            "/", StaticFiles(directory=frontend_build_dir, html=True), name="frontend"
+        )
+
     return app
 
 
@@ -1313,13 +1387,46 @@ def create_app():
 # ============================================================================
 
 # Initialize app at the module level
-app = create_app()
+try:
+    app = create_app()
+except Exception as e:
+    # A bare module-level create_app() call, if it raises, crashes the whole
+    # process before main() is ever reached — for a double-clicked .exe on a
+    # machine that's missing something (most likely: Chrome isn't
+    # installed), the console window can flash and close before a
+    # non-technical user reads anything useful. Print something actionable
+    # and, in local mode, keep the window open until they acknowledge it.
+    print("\n" + "=" * 70)
+    print("NTU Add-Drop Automator failed to start.")
+    print(f"Reason: {e}")
+    if config.RUN_MODE == "local":
+        print(
+            "\nThis usually means Google Chrome isn't installed on this "
+            "computer. Please install it from https://www.google.com/chrome/ "
+            "and try running this again."
+        )
+    print("=" * 70)
+    if config.RUN_MODE == "local":
+        input("\nPress Enter to close this window...")
+    sys.exit(1)
 
 
 def main():
     """Start the server when running directly."""
     port = int(os.environ.get("PORT", "5000"))  # Use Render's PORT env var
     print(f"Starting server on http://0.0.0.0:{port}")
+
+    if config.RUN_MODE == "local":
+        # By the time main() runs, create_app() (module level, above) has
+        # already finished initialize_components() — including preloading
+        # the driver pool — so the only remaining delay is uvicorn actually
+        # starting to listen, which is near-instant. A short delay here is
+        # enough to avoid opening the browser onto a not-yet-ready port,
+        # so the user never has to find and click a URL themselves.
+        threading.Timer(
+            1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")
+        ).start()
+
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
