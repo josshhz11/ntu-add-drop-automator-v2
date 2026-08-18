@@ -1136,6 +1136,10 @@ def create_app():
         allow_headers=["*"],
     )
 
+    # Computed early so the "/" route below can be skipped when a frontend
+    # is bundled (see the mount near the end of this function for why).
+    frontend_build_dir = get_frontend_build_dir()
+
     # ========================================================================
     # ROUTE DEFINITIONS
     # ========================================================================
@@ -1161,9 +1165,16 @@ def create_app():
 
         return {"is_active": True}"""
 
-    @app.get("/")
-    async def root():
-        return {"message": "NTU Add-Drop Automator Backend API", "status": "running"}
+    # Health-check-style status route for the hosted deployment (Render).
+    # Skipped when a frontend is bundled (the local desktop build): an
+    # explicit route here would always win over the StaticFiles mount below
+    # for the exact "/" path — regardless of registration order — so the
+    # bundled index.html would never be reachable at the app's own root URL.
+    if not frontend_build_dir:
+
+        @app.get("/")
+        async def root():
+            return {"message": "NTU Add-Drop Automator Backend API", "status": "running"}
 
     # API route to process first form submission page on the frontend (username, password, numModules)
     @app.post("/api/login")
@@ -1369,10 +1380,10 @@ def create_app():
     # bundled alongside the backend (the local desktop build). This mount
     # must come after every @app.get/@app.post route above — Starlette
     # matches routes in registration order, and with html=True this acts as
-    # a catch-all that would otherwise shadow the API routes. The hosted
+    # a catch-all that would otherwise shadow the API routes (the "/" route
+    # is skipped entirely above for this same reason). The hosted
     # deployment never ships a frontend_build directory (it's served
     # separately by Vercel instead), so this is skipped there entirely.
-    frontend_build_dir = get_frontend_build_dir()
     if frontend_build_dir:
         print(f"Serving bundled frontend from {frontend_build_dir}")
         app.mount(
