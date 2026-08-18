@@ -31,7 +31,14 @@ DESKTOP_DIR = os.path.join(REPO_ROOT, "desktop")
 DIST_DIR = os.path.join(DESKTOP_DIR, "dist")
 WORK_DIR = os.path.join(DESKTOP_DIR, "build")
 
-APP_NAME = "NTU-AddDrop-Automator"
+# Every platform gets an explicit suffix (including Windows) so the three
+# builds never share a basename. Without this, macOS and Linux would both
+# produce a file literally named "NTU-AddDrop-Automator" (PyInstaller only
+# adds an extension on Windows) — identical names that collide when the
+# release job uploads all platforms' binaries as assets on the same GitHub
+# Release, silently dropping one of the two.
+_APP_NAME_SUFFIX = {"Windows": "-windows", "Darwin": "-macos", "Linux": "-linux"}
+APP_NAME = "NTU-AddDrop-Automator" + _APP_NAME_SUFFIX.get(platform.system(), "")
 
 
 def run(cmd, cwd=None, env=None):

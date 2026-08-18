@@ -6,13 +6,13 @@ This project is an automation tool designed for Nanyang Technological University
 
 Feel free to check out the [project here!](https://ntu-add-drop-automator.vercel.app/)
 
-<img width="1301" alt="NTU Add-Drop Automator Home Page" src="https://github.com/josshhz11/ntu-add-drop-automator-v3/blob/main/assets/NTU-Add-Drop-Automator-Home-Page.png">
+<img width="1301" alt="NTU Add-Drop Automator Home Page" src="https://github.com/josshhz11/ntu-add-drop-automator-v2/blob/main/assets/NTU-Add-Drop-Automator-Home-Page.png">
 
 ## Run It Locally — No Setup Required (Windows)
 
 Prefer to run everything on your own computer instead of using the hosted site? There's a standalone version that needs nothing installed except Google Chrome — no Python, no Node, no Docker, no Redis, no config files.
 
-1. Go to the [Releases page](https://github.com/josshhz11/ntu-add-drop-automator-v2/releases) and download `NTU-AddDrop-Automator.exe` (Windows) from the latest release.
+1. Go to the [Releases page](https://github.com/josshhz11/ntu-add-drop-automator-v2/releases) and download `NTU-AddDrop-Automator-windows.exe` (Windows) from the latest release.
 2. Double-click it.
 3. A console window will open (this is normal — it's just showing status/log output), and a few seconds later your default browser will automatically open to the app.
 4. Log in with your real NTU credentials and submit your swap request exactly as you would on the hosted site.
